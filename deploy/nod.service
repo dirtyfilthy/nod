@@ -1,0 +1,36 @@
+# systemd unit for the nod HTTP service.
+#
+# Layout (matches the infra repo's Ansible deploy):
+#   /opt/nod          code clone (branch main), venv at /opt/nod/.venv
+#   /var/lib/nod      working dir: config.toml + SOUL.md + memory/
+#   /etc/nod/nod.env  secrets (root:nod 0640): OPENROUTER_API_KEY, NOD_API_TOKEN
+#
+# `nod serve` reads config.toml from its working directory, hence
+# WorkingDirectory=/var/lib/nod. The unit on the box is rendered by Ansible;
+# this file is the in-repo reference.
+
+[Unit]
+Description=nod agent HTTP service
+Documentation=https://github.com/dirtyfilthy/nod
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nod
+Group=nod
+WorkingDirectory=/var/lib/nod
+# Secrets (OPENROUTER_API_KEY, NOD_API_TOKEN) live here, not in the unit.
+EnvironmentFile=/etc/nod/nod.env
+ExecStart=/opt/nod/.venv/bin/nod serve
+Restart=on-failure
+RestartSec=2
+
+# Light hardening. Nod's tools (run_shell, write_file) intentionally have the
+# reach of this user -- the host is the sandbox -- so we do NOT lock the
+# filesystem down to read-only. We only drop privilege-escalation vectors.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

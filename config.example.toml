@@ -18,3 +18,9 @@ memory_dir = "~/.nod/memory"
 # Directories scanned for SKILL.md files. The "millions of skills" live here,
 # never in the core repo. Defaults to a sibling nod-extras/skills if present.
 skills_dirs = ["../nod-extras/skills"]
+
+# HTTP service settings, used by `nod serve`. Bind loopback by default and put a
+# reverse proxy / tunnel in front to expose it. The bearer token is read from
+# the NOD_API_TOKEN environment variable, never from this file.
+host = "127.0.0.1"
+port = 8080

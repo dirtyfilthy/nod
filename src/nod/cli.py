@@ -39,9 +39,22 @@ def build_agent(cfg: Config) -> Agent:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nod", description="A thin agent core.")
     parser.add_argument("-c", "--config", help="Path to a config.toml file.")
-    parser.add_argument(
+    # Default action (no subcommand) is the interactive chat REPL.
+    parser.set_defaults(command="chat", session="cli", host=None, port=None)
+
+    sub = parser.add_subparsers(dest="command")
+
+    chat_p = sub.add_parser("chat", help="Interactive CLI chat (default).")
+    chat_p.add_argument(
         "--session", default="cli", help="Conversation/session id (default: cli)."
     )
+
+    serve_p = sub.add_parser("serve", help="Run nod as a long-lived HTTP service.")
+    serve_p.add_argument("--host", default=None, help="Bind address (default: config).")
+    serve_p.add_argument(
+        "--port", type=int, default=None, help="Bind port (default: config)."
+    )
+
     args = parser.parse_args(argv)
 
     cfg = config_module.load(args.config)
@@ -51,7 +64,31 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[config] {exc}", file=sys.stderr)
         return 2
 
+    if args.command == "serve":
+        return _serve(cfg, agent, args)
+
     gateway: Gateway = CLIGateway(session_id=args.session)
+    gateway.run(agent)
+    return 0
+
+
+def _serve(cfg: Config, agent: Agent, args: argparse.Namespace) -> int:
+    token = cfg.api_token()
+    if not token:
+        print(
+            "[config] refusing to serve without auth: set $NOD_API_TOKEN to a "
+            "secret value first.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from nod.server import HTTPGateway
+
+    gateway: Gateway = HTTPGateway(
+        host=args.host or cfg.host,
+        port=args.port or cfg.port,
+        token=token,
+    )
     gateway.run(agent)
     return 0
 

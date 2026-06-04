@@ -7,11 +7,13 @@ to keep memory.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_CONFIG_NAMES = ("config.toml",)
+API_TOKEN_ENV = "NOD_API_TOKEN"
 
 
 @dataclass
@@ -22,6 +24,11 @@ class Config:
     soul_path: str = "SOUL.md"
     memory_dir: str = "~/.nod/memory"
     skills_dirs: list[str] = field(default_factory=lambda: ["../nod-extras/skills"])
+    # HTTP service (`nod serve`). Loopback by default; front it with a reverse
+    # proxy or tunnel to expose it. The auth token is read from the environment,
+    # never from here -- see Config.api_token().
+    host: str = "127.0.0.1"
+    port: int = 8080
     # Directory the config was loaded from; relative paths resolve against it.
     base_dir: Path = field(default_factory=Path.cwd)
 
@@ -36,6 +43,11 @@ class Config:
     def resolved_skills_dirs(self) -> list[Path]:
         return [self.resolve(d) for d in self.skills_dirs]
 
+    def api_token(self) -> str:
+        """Bearer token required by the HTTP service, read from the environment."""
+
+        return os.environ.get(API_TOKEN_ENV, "")
+
 
 def load(path: str | Path | None = None) -> Config:
     """Load config from an explicit path, a discovered `config.toml`, or defaults."""
@@ -45,7 +57,16 @@ def load(path: str | Path | None = None) -> Config:
         return Config()
     raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
     cfg = Config(base_dir=config_path.parent)
-    for key in ("model", "base_url", "max_turns", "soul_path", "memory_dir", "skills_dirs"):
+    for key in (
+        "model",
+        "base_url",
+        "max_turns",
+        "soul_path",
+        "memory_dir",
+        "skills_dirs",
+        "host",
+        "port",
+    ):
         if key in raw:
             setattr(cfg, key, raw[key])
     return cfg
