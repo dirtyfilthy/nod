@@ -1,0 +1,10 @@
+# Benchmark-only dependencies. Kept out of the core package (pyproject.toml) so
+# nod stays thin; install these only when running the benchmark.
+#
+#   pip install -r bench/swebench/requirements.txt
+
+# Patch generation (run_nod.py): load the SWE-bench dataset from HuggingFace.
+datasets>=2.19
+
+# Grading (official harness). Needs Docker + an x86 host; see README.md.
+swebench>=3.0
