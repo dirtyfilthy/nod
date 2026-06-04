@@ -1,0 +1,20 @@
+# Copy to config.toml and edit. Every key is optional; defaults are shown.
+# The API key is NOT read from here -- it comes from the OPENROUTER_API_KEY
+# environment variable so secrets stay out of the repo.
+
+# The rented brain.
+model = "deepseek/deepseek-v3.2"
+base_url = "https://openrouter.ai/api/v1"
+
+# How many provider round-trips a single turn may take before giving up.
+max_turns = 20
+
+# Nod's persona / base system prompt. Relative paths resolve from this file.
+soul_path = "SOUL.md"
+
+# Where conversation history is stored (JSON files, one per session).
+memory_dir = "~/.nod/memory"
+
+# Directories scanned for SKILL.md files. The "millions of skills" live here,
+# never in the core repo. Defaults to a sibling nod-extras/skills if present.
+skills_dirs = ["../nod-extras/skills"]

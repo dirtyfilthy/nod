@@ -1,0 +1,62 @@
+"""Configuration: env plus an optional TOML file.
+
+Secrets never live in the config file. The API key is read from the environment by
+the provider. Everything here is plumbing: which model, where to find skills, where
+to keep memory.
+"""
+
+from __future__ import annotations
+
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+DEFAULT_CONFIG_NAMES = ("config.toml",)
+
+
+@dataclass
+class Config:
+    model: str = "deepseek/deepseek-v3.2"
+    base_url: str = "https://openrouter.ai/api/v1"
+    max_turns: int = 20
+    soul_path: str = "SOUL.md"
+    memory_dir: str = "~/.nod/memory"
+    skills_dirs: list[str] = field(default_factory=lambda: ["../nod-extras/skills"])
+    # Directory the config was loaded from; relative paths resolve against it.
+    base_dir: Path = field(default_factory=Path.cwd)
+
+    def resolve(self, path: str) -> Path:
+        p = Path(path).expanduser()
+        return p if p.is_absolute() else (self.base_dir / p)
+
+    def soul(self) -> str:
+        p = self.resolve(self.soul_path)
+        return p.read_text(encoding="utf-8") if p.exists() else ""
+
+    def resolved_skills_dirs(self) -> list[Path]:
+        return [self.resolve(d) for d in self.skills_dirs]
+
+
+def load(path: str | Path | None = None) -> Config:
+    """Load config from an explicit path, a discovered `config.toml`, or defaults."""
+
+    config_path = _find_config(path)
+    if config_path is None:
+        return Config()
+    raw = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    cfg = Config(base_dir=config_path.parent)
+    for key in ("model", "base_url", "max_turns", "soul_path", "memory_dir", "skills_dirs"):
+        if key in raw:
+            setattr(cfg, key, raw[key])
+    return cfg
+
+
+def _find_config(path: str | Path | None) -> Path | None:
+    if path is not None:
+        p = Path(path).expanduser()
+        return p if p.exists() else None
+    for name in DEFAULT_CONFIG_NAMES:
+        candidate = Path.cwd() / name
+        if candidate.exists():
+            return candidate
+    return None
