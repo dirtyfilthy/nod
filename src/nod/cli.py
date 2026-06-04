@@ -12,6 +12,7 @@ import sys
 
 from nod import config as config_module
 from nod.agent import Agent
+from nod.builtins import builtin_tools
 from nod.config import Config
 from nod.gateway import CLIGateway, Gateway
 from nod.memory import JSONFileMemory
@@ -24,7 +25,7 @@ def build_agent(cfg: Config) -> Agent:
     provider = OpenAICompatibleProvider(model=cfg.model, base_url=cfg.base_url)
     memory = JSONFileMemory(cfg.memory_dir)
     skills = SkillLoader(cfg.resolved_skills_dirs())
-    registry = ToolRegistry()
+    registry = ToolRegistry(builtin_tools())
     return Agent(
         provider=provider,
         registry=registry,
