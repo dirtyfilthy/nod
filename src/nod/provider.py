@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Callable, Protocol
+import time
+from typing import Any, Callable, Iterable, Protocol
 
 import httpx
 
@@ -49,12 +50,19 @@ class OpenAICompatibleProvider:
         api_key: str | None = None,
         api_key_env: str = "OPENROUTER_API_KEY",
         timeout: float = 120.0,
+        deadline_seconds: float | None = 600.0,
         extra_headers: dict[str, str] | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or os.environ.get(api_key_env, "")
         self.timeout = timeout
+        # Overall wall-clock budget for one completion. The httpx `timeout` is
+        # per-read, which a trickling-but-stalled SSE stream (e.g. keep-alive
+        # comments) can dodge forever; this bounds the whole stream so a wedged
+        # request fails instead of hanging the agent loop / a service thread.
+        # Set to None to disable.
+        self.deadline_seconds = deadline_seconds
         self.extra_headers = extra_headers or {}
         if not self.api_key:
             raise ProviderError(
@@ -81,8 +89,11 @@ class OpenAICompatibleProvider:
             **self.extra_headers,
         }
 
-        content_parts: list[str] = []
-        tool_acc = _ToolCallAccumulator()
+        deadline = (
+            time.monotonic() + self.deadline_seconds
+            if self.deadline_seconds
+            else None
+        )
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
@@ -97,19 +108,42 @@ class OpenAICompatibleProvider:
                         raise ProviderError(
                             f"{response.status_code} from provider: {body}"
                         )
-                    for line in response.iter_lines():
-                        delta = _parse_sse_line(line)
-                        if delta is None:
-                            continue
-                        text = delta.get("content")
-                        if text:
-                            content_parts.append(text)
-                            if on_token is not None:
-                                on_token(text)
-                        for tc in delta.get("tool_calls", []) or []:
-                            tool_acc.add(tc)
+                    return self._consume(response.iter_lines(), on_token, deadline)
         except httpx.HTTPError as exc:
             raise ProviderError(f"request to provider failed: {exc}") from exc
+
+    def _consume(
+        self,
+        lines: Iterable[str],
+        on_token: OnToken | None,
+        deadline: float | None,
+        *,
+        now: Callable[[], float] = time.monotonic,
+    ) -> Message:
+        """Assemble streamed SSE lines into one message, aborting past `deadline`.
+
+        Factored out so the streaming/deadline logic is testable without a live
+        connection.
+        """
+
+        content_parts: list[str] = []
+        tool_acc = _ToolCallAccumulator()
+        for line in lines:
+            if deadline is not None and now() >= deadline:
+                raise ProviderError(
+                    f"provider stream exceeded {self.deadline_seconds:.0f}s "
+                    "deadline (stalled?)"
+                )
+            delta = _parse_sse_line(line)
+            if delta is None:
+                continue
+            text = delta.get("content")
+            if text:
+                content_parts.append(text)
+                if on_token is not None:
+                    on_token(text)
+            for tc in delta.get("tool_calls", []) or []:
+                tool_acc.add(tc)
 
         return Message(
             role="assistant",

@@ -1,6 +1,19 @@
 from __future__ import annotations
 
-from nod.provider import _ToolCallAccumulator, _parse_sse_line
+import pytest
+
+from nod.provider import (
+    OpenAICompatibleProvider,
+    ProviderError,
+    _ToolCallAccumulator,
+    _parse_sse_line,
+)
+
+CONTENT_LINES = [
+    'data: {"choices":[{"delta":{"content":"hel"}}]}',
+    'data: {"choices":[{"delta":{"content":"lo"}}]}',
+    "data: [DONE]",
+]
 
 
 def test_parse_sse_line_content():
@@ -33,3 +46,33 @@ def test_accumulator_handles_multiple_parallel_calls():
     acc.add({"index": 1, "id": "b", "function": {"name": "two", "arguments": "{}"}})
     calls = acc.finish()
     assert [c.name for c in calls] == ["one", "two"]
+
+
+def _provider() -> OpenAICompatibleProvider:
+    return OpenAICompatibleProvider(model="m", api_key="x")
+
+
+def test_consume_assembles_stream_without_deadline():
+    msg = _provider()._consume(iter(CONTENT_LINES), None, deadline=None)
+    assert msg.content == "hello"
+
+
+def test_consume_streams_tokens_to_callback():
+    tokens: list[str] = []
+    _provider()._consume(iter(CONTENT_LINES), tokens.append, deadline=None)
+    assert tokens == ["hel", "lo"]
+
+
+def test_consume_aborts_when_deadline_passed():
+    # A trickle of keep-alive comments that never completes: with a clock already
+    # past the deadline, the very first line trips the wall-clock guard.
+    trickle = iter([": keep-alive"] * 5)
+    with pytest.raises(ProviderError, match="deadline"):
+        _provider()._consume(trickle, None, deadline=10.0, now=lambda: 11.0)
+
+
+def test_consume_within_deadline_succeeds():
+    msg = _provider()._consume(
+        iter(CONTENT_LINES), None, deadline=100.0, now=lambda: 1.0
+    )
+    assert msg.content == "hello"

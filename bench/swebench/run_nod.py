@@ -55,6 +55,9 @@ Rules:
 - You may run the project's tests with run_shell to check your work.
 - Do NOT run `git commit`, `git add`, or `git push`. Just leave your edits in the
   working tree; the harness captures the diff.
+- If you create any temporary or scratch files while investigating (helper
+  scripts, notes, repros), DELETE them before finishing so they don't leak into
+  the patch. Only the actual fix should remain in the working tree.
 - When the fix is complete, reply with a one-line summary and stop calling tools.
 """
 
