@@ -14,6 +14,7 @@ from pathlib import Path
 
 DEFAULT_CONFIG_NAMES = ("config.toml",)
 API_TOKEN_ENV = "NOD_API_TOKEN"
+BUNDLED_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 @dataclass
@@ -41,7 +42,11 @@ class Config:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     def resolved_skills_dirs(self) -> list[Path]:
-        return [self.resolve(d) for d in self.skills_dirs]
+        dirs = [self.resolve(d) for d in self.skills_dirs]
+        if BUNDLED_SKILLS_DIR not in dirs:
+            # Appended last so configured/user skills with the same name win.
+            dirs.append(BUNDLED_SKILLS_DIR)
+        return dirs
 
     def api_token(self) -> str:
         """Bearer token required by the HTTP service, read from the environment."""

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nod.config import Config
 from nod.messages import ToolCall
 from nod.skills import SkillLoader
 
@@ -70,3 +71,17 @@ def test_dispatch_read_skill_via_registry(tmp_path: Path):
         ToolCall(id="1", name="read_skill", arguments={"name": "deploy-checklist"})
     )
     assert out == "the steps"
+
+
+def test_bundled_skills_available():
+    loader = SkillLoader(Config().resolved_skills_dirs())
+    names = {s.name for s in loader.skills}
+    assert {"create-skill", "plan"} <= names
+
+    index = loader.index_text()
+    assert "create-skill:" in index
+    assert "plan:" in index
+
+    read_skill = loader.read_skill_tool()
+    assert "Create Skill" in read_skill.func(name="create-skill")
+    assert "Planning checklist" in read_skill.func(name="plan")
