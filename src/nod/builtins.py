@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +14,19 @@ from nod.tools import Tool, tool
 TEXT_LIMIT = 100_000
 SHELL_TIMEOUT_SECONDS = 60
 HTTP_TIMEOUT_SECONDS = 30
+FILE_HEADER_RE = re.compile(r"^### FILE: (.+)$", re.MULTILINE)
+SEARCH_MARKER = "<<<<<<< SEARCH"
+DIVIDER_MARKER = "======="
+REPLACE_MARKER = ">>>>>>> REPLACE"
+
+
+@dataclass(frozen=True)
+class _CUDOperation:
+    path: str
+    search: str | None = None
+    replacement: str | None = None
+    delete: bool = False
+    error: str | None = None
 
 
 def _truncate(text: str, limit: int = TEXT_LIMIT) -> str:
@@ -44,35 +59,157 @@ def read_file_tool() -> Tool:
     return read_file
 
 
-def write_file_tool() -> Tool:
+def _parse_cud_blocks(edits: str) -> list[_CUDOperation]:
+    matches = list(FILE_HEADER_RE.finditer(edits))
+    if not matches:
+        return [_CUDOperation(path="(input)", error="no ### FILE blocks found")]
+
+    operations: list[_CUDOperation] = []
+    if edits[: matches[0].start()].strip():
+        operations.append(
+            _CUDOperation(
+                path="(input)", error="unexpected text before first ### FILE header"
+            )
+        )
+
+    for i, match in enumerate(matches):
+        path = match.group(1).strip()
+        if not path:
+            operations.append(_CUDOperation(path="(input)", error="empty file path"))
+            continue
+
+        block_end = matches[i + 1].start() if i + 1 < len(matches) else len(edits)
+        body = edits[match.end() : block_end]
+        if body.startswith("\n"):
+            body = body[1:]
+
+        if body.strip() == "DELETE":
+            operations.append(_CUDOperation(path=path, delete=True))
+            continue
+
+        operation = _parse_search_replace_block(path, body)
+        operations.append(operation)
+
+    return operations
+
+
+def _parse_search_replace_block(path: str, body: str) -> _CUDOperation:
+    search_start = f"{SEARCH_MARKER}\n"
+    if not body.startswith(search_start):
+        return _CUDOperation(
+            path=path, error=f"expected {SEARCH_MARKER} or DELETE after file header"
+        )
+
+    rest = body[len(search_start) :]
+    if rest.startswith(f"{DIVIDER_MARKER}\n"):
+        search = ""
+        replacement_part = rest[len(DIVIDER_MARKER) + 1 :]
+    else:
+        divider = f"\n{DIVIDER_MARKER}\n"
+        divider_index = rest.find(divider)
+        if divider_index == -1:
+            return _CUDOperation(path=path, error=f"missing {DIVIDER_MARKER} divider")
+        search = rest[:divider_index]
+        replacement_part = rest[divider_index + len(divider) :]
+
+    if replacement_part.startswith(REPLACE_MARKER):
+        replacement = ""
+        trailing = replacement_part[len(REPLACE_MARKER) :]
+    else:
+        end_marker = f"\n{REPLACE_MARKER}"
+        end_index = replacement_part.find(end_marker)
+        if end_index == -1:
+            return _CUDOperation(
+                path=path, error=f"missing {REPLACE_MARKER} end marker"
+            )
+        replacement = replacement_part[:end_index]
+        trailing = replacement_part[end_index + len(end_marker) :]
+
+    if trailing.strip():
+        return _CUDOperation(
+            path=path, error=f"unexpected text after {REPLACE_MARKER} end marker"
+        )
+
+    return _CUDOperation(path=path, search=search, replacement=replacement)
+
+
+def _apply_cud_operation(operation: _CUDOperation) -> str:
+    if operation.error is not None:
+        return f"error: {operation.path}: {operation.error}"
+
+    p = Path(operation.path).expanduser()
+    if operation.delete:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            return f"error: {operation.path}: file does not exist"
+        except OSError as exc:
+            return f"error: {operation.path}: could not delete file: {exc}"
+        return f"deleted {p}"
+
+    if operation.search is None or operation.replacement is None:
+        return f"error: {operation.path}: malformed operation"
+
+    if operation.search == "":
+        if p.exists():
+            return f"error: {operation.path}: file already exists"
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(operation.replacement, encoding="utf-8")
+        except OSError as exc:
+            return f"error: {operation.path}: could not create file: {exc}"
+        return f"created {p}"
+
+    try:
+        content = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return f"error: {operation.path}: file does not exist"
+    except OSError as exc:
+        return f"error: {operation.path}: could not read file: {exc}"
+
+    matches = content.count(operation.search)
+    if matches == 0:
+        return f"error: {operation.path}: SEARCH text not found"
+    if matches > 1:
+        return (
+            f"error: {operation.path}: SEARCH text matched {matches} times; "
+            "add more surrounding context to make it unique"
+        )
+
+    try:
+        p.write_text(
+            content.replace(operation.search, operation.replacement, 1),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return f"error: {operation.path}: could not write file: {exc}"
+    return f"updated {p}"
+
+
+def cud_file_tool() -> Tool:
     @tool(
-        "write_file",
-        "Write UTF-8 text to disk, creating parent directories as needed.",
+        "cud_file",
+        "Create, update, or delete UTF-8 text files using SEARCH/REPLACE blocks.",
         {
             "type": "object",
             "properties": {
-                "path": {
+                "edits": {
                     "type": "string",
-                    "description": "Path to the file to write.",
-                },
-                "content": {
-                    "type": "string",
-                    "description": "Text content to write.",
+                    "description": (
+                        "One or more blocks. Update: ### FILE: path\n"
+                        "<<<<<<< SEARCH\nold text\n=======\nnew text\n"
+                        ">>>>>>> REPLACE. Create uses an empty SEARCH section. "
+                        "Delete uses ### FILE: path followed by DELETE."
+                    ),
                 },
             },
-            "required": ["path", "content"],
+            "required": ["edits"],
         },
     )
-    def write_file(path: str, content: str) -> str:
-        p = Path(path).expanduser()
-        try:
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content, encoding="utf-8")
-        except OSError as exc:
-            return f"error: could not write file '{path}': {exc}"
-        return f"wrote {len(content.encode('utf-8'))} bytes to {p}"
+    def cud_file(edits: str) -> str:
+        return "\n".join(_apply_cud_operation(op) for op in _parse_cud_blocks(edits))
 
-    return write_file
+    return cud_file
 
 
 def list_dir_tool() -> Tool:
@@ -170,7 +307,7 @@ def http_get_tool() -> Tool:
 def builtin_tools() -> list[Tool]:
     return [
         read_file_tool(),
-        write_file_tool(),
+        cud_file_tool(),
         list_dir_tool(),
         run_shell_tool(),
         http_get_tool(),

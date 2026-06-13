@@ -26,7 +26,7 @@ ExecStart=/opt/nod/.venv/bin/nod serve
 Restart=on-failure
 RestartSec=2
 
-# Light hardening. Nod's tools (run_shell, write_file) intentionally have the
+# Light hardening. Nod's tools (run_shell, cud_file) intentionally have the
 # reach of this user -- the host is the sandbox -- so we do NOT lock the
 # filesystem down to read-only. We only drop privilege-escalation vectors.
 NoNewPrivileges=true

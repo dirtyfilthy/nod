@@ -51,7 +51,7 @@ Rules:
 - The repository is already checked out at the relevant commit in your CWD.
 - Investigate with the tools: list_dir, read_file, run_shell (grep, find, etc.).
 - Make the minimal change that fixes the issue. Edit source files with
-  write_file. Do NOT edit the test files.
+  cud_file SEARCH/REPLACE blocks. Do NOT edit the test files.
 - You may run the project's tests with run_shell to check your work.
 - Do NOT run `git commit`, `git add`, or `git push`. Just leave your edits in the
   working tree; the harness captures the diff.

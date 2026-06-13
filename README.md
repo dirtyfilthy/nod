@@ -48,13 +48,13 @@ It's a new `HTTPGateway` (see `server.py`) alongside the `CLIGateway`; the agent
 
 ## Built-in tools
 
-The core ships five small tools: `read_file`, `write_file`, `list_dir`, `run_shell`, and `http_get`. They are deliberately plain and registered in `cli.py` so you can remove or replace any of them in one place.
+The core ships five small tools: `read_file`, `cud_file`, `list_dir`, `run_shell`, and `http_get`. `cud_file` creates, updates, and deletes files with SEARCH/REPLACE blocks. They are deliberately plain and registered in `cli.py` so you can remove or replace any of them in one place.
 
 Anything richer belongs in `nod-extras` later.
 
 ## Security model
 
-Nod assumes it runs on a dedicated VPS, not your home box. The host is the sandbox. `run_shell`, `write_file`, and `http_get` have the full reach of the process user by design, so the blast radius is whatever you put on that VPS. Isolation is operational, not enforced in code: run Nod on a disposable machine, as a non-root user, with no secrets on the box beyond what it needs. To narrow what the model can do, trim the tool list in `cli.py`.
+Nod assumes it runs on a dedicated VPS, not your home box. The host is the sandbox. `run_shell`, `cud_file`, and `http_get` have the full reach of the process user by design, so the blast radius is whatever you put on that VPS. Isolation is operational, not enforced in code: run Nod on a disposable machine, as a non-root user, with no secrets on the box beyond what it needs. To narrow what the model can do, trim the tool list in `cli.py`.
 
 Skills are plain markdown with a tiny frontmatter, discovered from the directories in `skills_dirs`:
 
