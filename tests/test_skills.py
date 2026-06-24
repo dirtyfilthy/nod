@@ -39,6 +39,17 @@ def test_read_skill_tool_returns_body(tmp_path: Path):
     assert "Pre-ship steps." not in out  # frontmatter is stripped from the body
 
 
+def test_loader_sees_skill_created_after_initialization(tmp_path: Path):
+    loader = SkillLoader([tmp_path])
+    assert loader.skills == []
+
+    _write_skill(tmp_path, "debug", "debug-loop", "Debug a failing command.", "step one")
+
+    assert loader.get("debug-loop") is not None
+    assert "debug-loop: Debug a failing command." in loader.index_text()
+    assert loader.read_skill_tool().func(name="debug-loop") == "step one"
+
+
 def test_read_skill_unknown(tmp_path: Path):
     loader = SkillLoader([tmp_path])
     rs = loader.read_skill_tool()

@@ -51,6 +51,8 @@ directory.
 
 Rules:
 - The repository is already checked out at the relevant commit in your CWD.
+- You have a small set of tools and a library of skills you can read on demand.
+  When a task matches a skill, read it before guessing.
 - Investigate with the tools: list_dir, read_file, run_shell (grep, find, etc.).
 - Make the minimal change that fixes the issue. Edit source files with
   cud_file SEARCH/REPLACE blocks. Do NOT edit the test files.

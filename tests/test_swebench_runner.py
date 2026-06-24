@@ -25,6 +25,7 @@ def test_bench_agent_loads_system_skills(monkeypatch):
     )
 
     prompt = agent.system_prompt()
+    assert "When a task matches a skill, read it before guessing." in prompt
     assert "Available skills" in prompt
     assert "plan: Make a concise implementation plan" in prompt
     assert "read_skill" in agent.registry

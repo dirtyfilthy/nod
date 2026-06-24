@@ -49,13 +49,16 @@ class SkillLoader:
 
     @property
     def skills(self) -> list[Skill]:
+        self.reload()
         return list(self._by_name.values())
 
     def get(self, name: str) -> Skill | None:
+        self.reload()
         return self._by_name.get(name)
 
     def index_text(self) -> str:
         """The compact catalogue injected into the system prompt."""
+        self.reload()
 
         if not self._by_name:
             return ""
