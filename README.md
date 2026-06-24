@@ -48,7 +48,7 @@ It's a new `HTTPGateway` (see `server.py`) alongside the `CLIGateway`; the agent
 
 ## Built-in tools
 
-The core ships five small tools: `read_file`, `cud_file`, `list_dir`, `run_shell`, and `http_get`. `cud_file` creates, updates, and deletes files with SEARCH/REPLACE blocks. They are deliberately plain and registered in `cli.py` so you can remove or replace any of them in one place.
+The core ships five small tools: `read_file`, `cud_file`, `list_dir`, `run_shell`, and `http_get`. `read_file` returns paginated line ranges with offsets, and `cud_file` creates, updates, and deletes files with SEARCH/REPLACE blocks. They are deliberately plain and registered in `cli.py` so you can remove or replace any of them in one place.
 
 Anything richer belongs in `nod-extras` later.
 

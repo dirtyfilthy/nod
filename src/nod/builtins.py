@@ -14,6 +14,7 @@ from nod.tools import Tool, tool
 TEXT_LIMIT = 100_000
 SHELL_TIMEOUT_SECONDS = 60
 HTTP_TIMEOUT_SECONDS = 30
+READ_FILE_LINE_LIMIT = 1024
 FILE_HEADER_RE = re.compile(r"^### FILE: (.+)$", re.MULTILINE)
 SEARCH_MARKER = "<<<<<<< SEARCH"
 DIVIDER_MARKER = "======="
@@ -38,23 +39,63 @@ def _truncate(text: str, limit: int = TEXT_LIMIT) -> str:
 def read_file_tool() -> Tool:
     @tool(
         "read_file",
-        "Read a UTF-8 text file from disk.",
+        "Read a paginated range of lines from a UTF-8 text file.",
         {
             "type": "object",
             "properties": {
-                "path": {
+                "filename": {
                     "type": "string",
                     "description": "Path to the file to read.",
-                }
+                },
+                "start_line": {
+                    "type": "integer",
+                    "description": "Zero-indexed line offset to start reading from.",
+                    "minimum": 0,
+                },
+                "line_count": {
+                    "type": "integer",
+                    "description": (
+                        f"Number of lines to read, capped at {READ_FILE_LINE_LIMIT}."
+                    ),
+                    "minimum": 0,
+                },
             },
-            "required": ["path"],
+            "required": ["filename", "start_line", "line_count"],
         },
     )
-    def read_file(path: str) -> str:
+    def read_file(filename: str, start_line: int, line_count: int) -> str:
+        if start_line < 0:
+            return "error: start_line must be non-negative"
+        if line_count < 0:
+            return "error: line_count must be non-negative"
+
         try:
-            return _truncate(Path(path).expanduser().read_text(encoding="utf-8"))
+            data = Path(filename).expanduser().read_bytes()
         except OSError as exc:
-            return f"error: could not read file '{path}': {exc}"
+            return f"error: could not read file '{filename}': {exc}"
+
+        if b"\x00" in data:
+            return f"error: file '{filename}' appears to be binary"
+
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"error: file '{filename}' appears to be binary"
+
+        lines = text.splitlines()
+        total_lines = len(lines)
+        capped_count = min(line_count, READ_FILE_LINE_LIMIT)
+        end_offset = min(start_line + capped_count, total_lines)
+        selected = lines[start_line:end_offset]
+
+        header = [
+            f"start_offset: {start_line}",
+            f"lines_returned: {len(selected)}",
+            f"end_offset: {end_offset}",
+            f"next_offset: {end_offset}",
+            f"total_lines: {total_lines}",
+        ]
+        return "\n".join(header + [""] + selected)
 
     return read_file
 

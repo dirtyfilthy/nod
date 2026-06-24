@@ -45,9 +45,21 @@ def test_read_write_and_list_dir(tmp_path):
     assert written.startswith("created ")
 
     read = registry.dispatch(
-        ToolCall(id="2", name="read_file", arguments={"path": str(path)})
+        ToolCall(
+            id="2",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 0, "line_count": 10},
+        )
     )
-    assert read == "hello"
+    assert read == (
+        "start_offset: 0\n"
+        "lines_returned: 1\n"
+        "end_offset: 1\n"
+        "next_offset: 1\n"
+        "total_lines: 1\n"
+        "\n"
+        "hello"
+    )
 
     listed = registry.dispatch(
         ToolCall(id="3", name="list_dir", arguments={"path": str(tmp_path)})
@@ -210,10 +222,136 @@ def test_read_file_missing_path_returns_error(tmp_path):
         ToolCall(
             id="1",
             name="read_file",
-            arguments={"path": str(tmp_path / "missing.txt")},
+            arguments={
+                "filename": str(tmp_path / "missing.txt"),
+                "start_line": 0,
+                "line_count": 1,
+            },
         )
     )
     assert out.startswith("error: could not read file")
+
+
+def test_read_file_returns_requested_line_range_with_metadata(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("zero\none\ntwo\nthree\n", encoding="utf-8")
+
+    out = _registry().dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 1, "line_count": 2},
+        )
+    )
+
+    assert out == (
+        "start_offset: 1\n"
+        "lines_returned: 2\n"
+        "end_offset: 3\n"
+        "next_offset: 3\n"
+        "total_lines: 4\n"
+        "\n"
+        "one\n"
+        "two"
+    )
+
+
+def test_read_file_short_read_past_end_is_not_an_error(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("zero\none\n", encoding="utf-8")
+
+    out = _registry().dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 1, "line_count": 10},
+        )
+    )
+
+    assert out == (
+        "start_offset: 1\n"
+        "lines_returned: 1\n"
+        "end_offset: 2\n"
+        "next_offset: 2\n"
+        "total_lines: 2\n"
+        "\n"
+        "one"
+    )
+
+
+def test_read_file_start_past_end_returns_only_header(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("zero\none\n", encoding="utf-8")
+
+    out = _registry().dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 10, "line_count": 5},
+        )
+    )
+
+    assert out == (
+        "start_offset: 10\n"
+        "lines_returned: 0\n"
+        "end_offset: 2\n"
+        "next_offset: 2\n"
+        "total_lines: 2\n"
+    )
+
+
+def test_read_file_caps_reads_at_1024_lines(tmp_path):
+    path = tmp_path / "long.txt"
+    path.write_text("\n".join(str(i) for i in range(1100)), encoding="utf-8")
+
+    out = _registry().dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 0, "line_count": 2000},
+        )
+    )
+
+    header, body = out.split("\n\n", 1)
+    assert header == (
+        "start_offset: 0\n"
+        "lines_returned: 1024\n"
+        "end_offset: 1024\n"
+        "next_offset: 1024\n"
+        "total_lines: 1100"
+    )
+    assert len(body.splitlines()) == 1024
+    assert body.splitlines()[-1] == "1023"
+
+
+def test_read_file_rejects_binary_file(tmp_path):
+    path = tmp_path / "data.bin"
+    path.write_bytes(b"text\x00binary")
+
+    out = _registry().dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 0, "line_count": 1},
+        )
+    )
+
+    assert out == f"error: file '{path}' appears to be binary"
+
+
+def test_read_file_rejects_invalid_utf8(tmp_path):
+    path = tmp_path / "data.bin"
+    path.write_bytes(b"\xff\xfe\xfa")
+
+    out = _registry().dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 0, "line_count": 1},
+        )
+    )
+
+    assert out == f"error: file '{path}' appears to be binary"
 
 
 def test_list_dir_missing_path_returns_error(tmp_path):
