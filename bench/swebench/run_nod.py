@@ -32,7 +32,7 @@ from pathlib import Path
 
 from nod.agent import Agent
 from nod.builtins import builtin_tools
-from nod.memory import InMemoryMemory
+from nod.memory import InMemoryMemory, JSONFileMemory
 from nod.provider import OpenAICompatibleProvider, ProviderError
 from nod.tools import ToolRegistry
 
@@ -107,7 +107,15 @@ def make_patch(repo_dir: str) -> str:
     return diff.stdout
 
 
-def solve_instance(inst: dict, *, model: str, base_url: str, max_turns: int, workdir: str) -> dict:
+def solve_instance(
+    inst: dict,
+    *,
+    model: str,
+    base_url: str,
+    max_turns: int,
+    workdir: str,
+    traces_dir: str | None,
+) -> dict:
     instance_id = inst["instance_id"]
     repo = inst["repo"]
     base_commit = inst["base_commit"]
@@ -131,7 +139,7 @@ def solve_instance(inst: dict, *, model: str, base_url: str, max_turns: int, wor
     agent = Agent(
         provider=provider,
         registry=ToolRegistry(builtin_tools()),
-        memory=InMemoryMemory(),
+        memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
         soul=SWE_SOUL,
         max_turns=max_turns,
     )
@@ -167,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-turns", type=int, default=50)
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where repos are cloned (default: a temp dir).")
+    parser.add_argument("--traces-dir", default=None, help="Write full per-instance chat traces as JSON files.")
     parser.add_argument("--dry-run", action="store_true", help="List the selected instances and exit (no model calls).")
     args = parser.parse_args(argv)
 
@@ -199,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                     base_url=args.base_url,
                     max_turns=args.max_turns,
                     workdir=workdir,
+                    traces_dir=args.traces_dir,
                 )
             except ProviderError as exc:
                 sys.exit(f"provider error (check key/model): {exc}")
