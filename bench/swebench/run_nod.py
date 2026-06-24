@@ -32,8 +32,10 @@ from pathlib import Path
 
 from nod.agent import Agent
 from nod.builtins import builtin_tools
+from nod.config import Config
 from nod.memory import InMemoryMemory, JSONFileMemory
 from nod.provider import OpenAICompatibleProvider, ProviderError
+from nod.skills import SkillLoader
 from nod.tools import ToolRegistry
 
 DEFAULT_DATASET = "princeton-nlp/SWE-bench_Lite"
@@ -107,6 +109,27 @@ def make_patch(repo_dir: str) -> str:
     return diff.stdout
 
 
+def build_bench_agent(
+    *,
+    model: str,
+    base_url: str,
+    max_turns: int,
+    traces_dir: str | None,
+) -> Agent:
+    """Build the default nod instance used for SWE-bench generation."""
+    cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
+    provider = OpenAICompatibleProvider(model=cfg.model, base_url=cfg.base_url)
+    skills = SkillLoader(cfg.resolved_skills_dirs())
+    return Agent(
+        provider=provider,
+        registry=ToolRegistry(builtin_tools()),
+        memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
+        skills=skills,
+        soul=SWE_SOUL,
+        max_turns=cfg.max_turns,
+    )
+
+
 def solve_instance(
     inst: dict,
     *,
@@ -135,13 +158,11 @@ def solve_instance(
         print(f"  ! checkout failed: {co.stderr.strip()[:200]}", flush=True)
         return {"instance_id": instance_id, "model_patch": "", "model_name_or_path": f"nod-{model}"}
 
-    provider = OpenAICompatibleProvider(model=model, base_url=base_url)
-    agent = Agent(
-        provider=provider,
-        registry=ToolRegistry(builtin_tools()),
-        memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
-        soul=SWE_SOUL,
+    agent = build_bench_agent(
+        model=model,
+        base_url=base_url,
         max_turns=max_turns,
+        traces_dir=traces_dir,
     )
 
     prompt = PROMPT_TEMPLATE.format(problem=inst["problem_statement"])
