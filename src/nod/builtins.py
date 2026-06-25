@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -15,7 +16,50 @@ TEXT_LIMIT = 100_000
 SHELL_TIMEOUT_SECONDS = 60
 HTTP_TIMEOUT_SECONDS = 30
 READ_FILE_LINE_LIMIT = 1024
+SHELL_MAX_LINES = 2000
+SHELL_MAX_BYTES = 50 * 1024  # 50 KB
 FILE_HEADER_RE = re.compile(r"^### FILE: (.+)$", re.MULTILINE)
+
+
+def _truncate_shell_output(output: str) -> tuple[str, str | None]:
+    """Return (text_for_model, tmp_path_or_none).
+
+    Keeps the last SHELL_MAX_LINES lines or SHELL_MAX_BYTES bytes, whichever
+    limit is hit first.  If the output is truncated the full text is written to
+    a temp file and the path is appended so the model can read it.
+    """
+    lines = output.splitlines()
+    total_lines = len(lines)
+    total_bytes = len(output.encode())
+
+    if total_lines <= SHELL_MAX_LINES and total_bytes <= SHELL_MAX_BYTES:
+        return output, None
+
+    # Walk backwards collecting lines until we hit a limit.
+    kept: list[str] = []
+    kept_bytes = 0
+    for line in reversed(lines):
+        line_bytes = len(line.encode()) + 1  # +1 for newline
+        if len(kept) >= SHELL_MAX_LINES or kept_bytes + line_bytes > SHELL_MAX_BYTES:
+            break
+        kept.append(line)
+        kept_bytes += line_bytes
+    kept.reverse()
+
+    # Write full output to a temp file the model can read_file later.
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".log", prefix="nod-shell-", delete=False, encoding="utf-8"
+    )
+    tmp.write(output)
+    tmp.close()
+
+    skipped = total_lines - len(kept)
+    tail = "\n".join(kept)
+    tail += (
+        f"\n\n[Showing last {len(kept)} of {total_lines} lines. "
+        f"Full output: {tmp.name}]"
+    )
+    return tail, tmp.name
 SEARCH_MARKER = "<<<<<<< SEARCH"
 DIVIDER_MARKER = "======="
 REPLACE_MARKER = ">>>>>>> REPLACE"
@@ -310,7 +354,8 @@ def run_shell_tool() -> Tool:
         output = completed.stdout + completed.stderr
         if not output:
             output = "(no output)"
-        return f"exit code: {completed.returncode}\n{output}"
+        truncated, _ = _truncate_shell_output(output)
+        return f"exit code: {completed.returncode}\n{truncated}"
 
     return run_shell
 

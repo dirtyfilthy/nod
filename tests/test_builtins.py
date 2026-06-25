@@ -373,6 +373,42 @@ def test_run_shell_returns_output_and_exit_code():
     assert "hello" in out
 
 
+def test_run_shell_truncates_large_output_to_tmpfile():
+    from nod.builtins import SHELL_MAX_LINES, _truncate_shell_output
+
+    big = "\n".join(f"line {i}" for i in range(SHELL_MAX_LINES + 100))
+    text, tmp_path_out = _truncate_shell_output(big)
+
+    assert tmp_path_out is not None, "expected a tmp file path"
+    assert "Full output:" in text
+    assert tmp_path_out in text
+
+    from pathlib import Path
+    assert Path(tmp_path_out).read_text() == big
+
+    lines_shown = [l for l in text.splitlines() if l.startswith("line ")]
+    assert len(lines_shown) <= SHELL_MAX_LINES
+
+
+def test_run_shell_no_truncation_for_small_output():
+    from nod.builtins import _truncate_shell_output
+
+    small = "line one\nline two\n"
+    text, tmp = _truncate_shell_output(small)
+    assert tmp is None
+    assert text == small
+
+
+def test_run_shell_truncation_byte_limit():
+    from nod.builtins import SHELL_MAX_BYTES, _truncate_shell_output
+
+    fat_line = "x" * (SHELL_MAX_BYTES + 1)
+    big = "\n".join([fat_line] * 5)
+    text, tmp = _truncate_shell_output(big)
+    assert tmp is not None
+    assert "Full output:" in text
+
+
 def test_http_get_uses_httpx_without_network(monkeypatch):
     class FakeResponse:
         status_code = 200
