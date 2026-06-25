@@ -1,3 +1,3 @@
 # TODO
 
-- [ ] Add context compaction — when session history approaches the context window, summarize old messages and keep only recent ones. Pi's implementation in `packages/coding-agent/src/core/compaction/compaction.ts` (cloned at `/home/alhazred/src/scratch/pi`) is a good reference: find a cut point by walking backwards until `keepRecentTokens` is reached, LLM-summarize everything before the cut, replace with a structured markdown checkpoint, and keep the full JSONL history intact (compaction is append-only). The summary format (Goal / Progress / Key Decisions / Next Steps / Critical Context + file lists) is worth reusing.
+- [x] Add context compaction — implemented with append-only JSONL memory, start-of-turn and mid-turn checks, iterative structured summaries, and Pi-style recent-context cut points.

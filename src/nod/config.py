@@ -30,6 +30,10 @@ class Config:
     # never from here -- see Config.api_token().
     host: str = "127.0.0.1"
     port: int = 8080
+    compaction_enabled: bool = True
+    context_window: int = 128_000
+    reserve_tokens: int = 16_384
+    keep_recent_tokens: int = 20_000
     # Directory the config was loaded from; relative paths resolve against it.
     base_dir: Path = field(default_factory=Path.cwd)
 
@@ -74,6 +78,17 @@ def load(path: str | Path | None = None) -> Config:
     ):
         if key in raw:
             setattr(cfg, key, raw[key])
+    compaction = raw.get("compaction", {})
+    if isinstance(compaction, dict):
+        mapping = {
+            "enabled": "compaction_enabled",
+            "context_window": "context_window",
+            "reserve_tokens": "reserve_tokens",
+            "keep_recent_tokens": "keep_recent_tokens",
+        }
+        for source, target in mapping.items():
+            if source in compaction:
+                setattr(cfg, target, compaction[source])
     return cfg
 
 

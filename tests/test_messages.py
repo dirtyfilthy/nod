@@ -41,6 +41,23 @@ def test_storage_round_trip():
     assert restored[3].tool_call_id == "c1"
 
 
+def test_compaction_summary_serializes_as_user_for_provider():
+    msg = Message(
+        role="user",
+        content="checkpoint",
+        id="cmp1",
+        kind="compaction_summary",
+    )
+
+    provider_dict = msg.to_provider_dict()
+    storage_dict = msg.to_storage_dict()
+
+    assert provider_dict["role"] == "user"
+    assert provider_dict["content"] == "checkpoint"
+    assert storage_dict["id"] == "cmp1"
+    assert storage_dict["kind"] == "compaction_summary"
+
+
 def test_from_provider_dict_handles_bad_json():
     tc = ToolCall.from_provider_dict(
         {"id": "x", "function": {"name": "f", "arguments": "{not json"}}

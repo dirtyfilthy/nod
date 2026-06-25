@@ -13,6 +13,7 @@ import sys
 from nod import config as config_module
 from nod.agent import Agent
 from nod.builtins import builtin_tools
+from nod.compaction import CompactionConfig
 from nod.config import Config
 from nod.gateway import CLIGateway, Gateway
 from nod.memory import JSONFileMemory
@@ -26,6 +27,12 @@ def build_agent(cfg: Config) -> Agent:
     memory = JSONFileMemory(cfg.memory_dir)
     skills = SkillLoader(cfg.resolved_skills_dirs())
     registry = ToolRegistry(builtin_tools())
+    compaction = CompactionConfig(
+        enabled=cfg.compaction_enabled,
+        context_window=cfg.context_window,
+        reserve_tokens=cfg.reserve_tokens,
+        keep_recent_tokens=cfg.keep_recent_tokens,
+    )
     return Agent(
         provider=provider,
         registry=registry,
@@ -33,6 +40,7 @@ def build_agent(cfg: Config) -> Agent:
         skills=skills,
         soul=cfg.soul(),
         max_turns=cfg.max_turns,
+        compaction=compaction,
     )
 
 

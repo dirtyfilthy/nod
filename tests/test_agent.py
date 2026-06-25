@@ -3,6 +3,7 @@ from __future__ import annotations
 from conftest import FakeProvider
 
 from nod.agent import Agent
+from nod.compaction import CompactionConfig
 from nod.memory import InMemoryMemory
 from nod.messages import Message, ToolCall, assistant
 from nod.tools import Tool, ToolRegistry
@@ -88,8 +89,7 @@ def test_history_persists_across_sends():
     agent.send("one", session_id="s4")
     agent.send("two", session_id="s4")
 
-    # On the second send, the loaded history already had the system prompt + first
-    # exchange, so no new system message is prepended.
+    # System prompts are ephemeral and prepended fresh on each provider call.
     second_call = provider.calls[1]
     system_msgs = [m for m in second_call if m.role == "system"]
     assert len(system_msgs) == 1
@@ -103,3 +103,35 @@ def test_streaming_callback_receives_tokens():
     tokens: list[str] = []
     agent.send("hi", session_id="s5", on_token=tokens.append)
     assert tokens == ["streamed"]
+
+
+def test_start_of_turn_compaction_is_persisted():
+    memory = InMemoryMemory()
+    old = Message(role="user", content="x" * 200)
+    recent = Message(role="user", content="recent")
+    memory.persist_messages("s6", [old, recent])
+    provider = FakeProvider([assistant("summary"), assistant("answer")])
+    agent = Agent(
+        provider=provider,
+        memory=memory,
+        compaction=CompactionConfig(
+            context_window=20,
+            reserve_tokens=0,
+            keep_recent_tokens=1,
+        ),
+    )
+
+    out = agent.send("next", session_id="s6")
+    loaded = memory.load("s6")
+
+    assert out == "answer"
+    assert loaded[0].kind == "compaction_summary"
+    assert loaded[0].content == "summary"
+    assert [m.content for m in loaded[1:]] == ["recent", "next", "answer"]
+    normal_call = provider.calls[1]
+    assert normal_call[0].kind == "compaction_summary"
+    assert [m.content for m in normal_call if m.role == "user"] == [
+        "summary",
+        "recent",
+        "next",
+    ]

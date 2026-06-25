@@ -8,6 +8,7 @@ and saved through the `Memory` interface, and the system prompt is just the pers
 
 from __future__ import annotations
 
+from nod.compaction import CompactionConfig, CompactionResult, compact_if_needed
 from nod.memory import Memory
 from nod.messages import Message, system, tool_result, user
 from nod.provider import OnToken, Provider
@@ -27,12 +28,14 @@ class Agent:
         skills: SkillLoader | None = None,
         soul: str = "",
         max_turns: int = 20,
+        compaction: CompactionConfig | None = None,
     ) -> None:
         self.provider = provider
         self.registry = registry or ToolRegistry()
         self.skills = skills
         self.soul = soul.strip()
         self.max_turns = max_turns
+        self.compaction = compaction
 
         if memory is None:
             from nod.memory import InMemoryMemory
@@ -53,6 +56,21 @@ class Agent:
                 parts.append(index)
         return "\n\n".join(parts)
 
+    def _compact(self, session_id: str, messages: list[Message]) -> list[Message]:
+        result = compact_if_needed(messages, self.provider, self.compaction)
+        if not result.compacted:
+            return result.messages
+        if result.first_kept_entry_id is None or result.summary is None:
+            return result.messages
+        compaction_id = self.memory.persist_compaction(
+            session_id,
+            result.summary,
+            result.first_kept_entry_id,
+            result.tokens_before,
+        )
+        result.messages[0].id = compaction_id
+        return result.messages
+
     def send(
         self,
         user_text: str,
@@ -61,16 +79,16 @@ class Agent:
         on_token: OnToken | None = None,
     ) -> str:
         messages = self.memory.load(session_id)
-        if not messages:
-            prompt = self.system_prompt()
-            if prompt:
-                messages.append(system(prompt))
+        messages = self._compact(session_id, messages)
+        prompt = self.system_prompt()
+        sys_msg = system(prompt) if prompt else None
         messages.append(user(user_text))
 
         reply = Message(role="assistant")
         for _ in range(self.max_turns):
+            provider_messages = ([sys_msg] if sys_msg is not None else []) + messages
             reply = self.provider.complete(
-                messages, self.registry.schemas() or None, on_token
+                provider_messages, self.registry.schemas() or None, on_token
             )
             messages.append(reply)
             if not reply.tool_calls:
@@ -78,6 +96,8 @@ class Agent:
             for call in reply.tool_calls:
                 result = self.registry.dispatch(call)
                 messages.append(tool_result(call.id, result))
+            self.memory.persist_messages(session_id, messages)
+            messages = self._compact(session_id, messages)
         else:
             # Loop bound hit while still calling tools. Record the ceiling so the
             # transcript explains the abrupt stop.
@@ -88,5 +108,5 @@ class Agent:
             messages.append(note)
             reply = note
 
-        self.memory.save(session_id, messages)
+        self.memory.persist_messages(session_id, messages)
         return reply.text

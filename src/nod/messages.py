@@ -55,13 +55,16 @@ class Message:
     content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_call_id: str | None = None
+    id: str | None = None
+    kind: str = "message"
 
     @property
     def text(self) -> str:
         return self.content or ""
 
     def to_provider_dict(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"role": self.role, "content": self.content}
+        role = "user" if self.kind == "compaction_summary" else self.role
+        out: dict[str, Any] = {"role": role, "content": self.content}
         if self.tool_calls:
             out["tool_calls"] = [tc.to_provider_dict() for tc in self.tool_calls]
         if self.tool_call_id is not None:
@@ -70,6 +73,8 @@ class Message:
 
     def to_storage_dict(self) -> dict[str, Any]:
         return {
+            "id": self.id,
+            "kind": self.kind,
             "role": self.role,
             "content": self.content,
             "tool_calls": [
@@ -89,6 +94,8 @@ class Message:
                 for tc in raw.get("tool_calls", [])
             ],
             tool_call_id=raw.get("tool_call_id"),
+            id=raw.get("id"),
+            kind=raw.get("kind", "message"),
         )
 
 
