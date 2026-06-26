@@ -125,16 +125,17 @@ def _prepare_venv(clone_dir: str, venv_dir: str) -> bool:
     if _run([py, "-m", "pip", "install", "--quiet", "--upgrade", "pip"], timeout=180).returncode != 0:
         # non-fatal; the install below will surface a real error if any
         pass
-    # Pin legacy build deps. SWE-bench base commits are often years old, and
-    # their setup_package.py files use setuptools APIs removed in setuptools
-    # 70+ (e.g. `from setuptools.dep_util import newer_group`, which astropy's
-    # wcs/setup_package.py imports). Modern setuptools crashes the build in
-    # the "Getting requirements" phase before the C compiler is even invoked.
-    # Pinning setuptools<70 + wheel + cython recreates the build env those
-    # repos were authored against.
+    # Pin legacy build deps into the venv. SWE-bench base commits are often
+    # years old, and their setup_package.py files use setuptools APIs removed
+    # in setuptools 70+ (e.g. `from setuptools.dep_util import newer_group`,
+    # which astropy's wcs/setup_package.py imports). Modern setuptools crashes
+    # the build in the "Getting requirements" phase before the C compiler runs.
+    # astropy's build also imports extension_helpers and numpy at setup time,
+    # so those must be present before the editable install too.
     if _run(
-        [py, "-m", "pip", "install", "--quiet", "setuptools<70", "wheel", "cython"],
-        timeout=600,
+        [py, "-m", "pip", "install", "--quiet",
+         "setuptools<70", "wheel", "cython", "extension_helpers", "numpy"],
+        timeout=900,
     ).returncode != 0:
         print("  ! legacy build deps install failed", flush=True)
         return False
@@ -142,10 +143,17 @@ def _prepare_venv(clone_dir: str, venv_dir: str) -> bool:
     if _run([py, "-m", "pip", "install", "--quiet", "pytest"], timeout=600).returncode != 0:
         print("  ! pytest install failed", flush=True)
         return False
-    # Editable install of the target package. This is the bit that makes the
-    # checkout importable. Some repos need build deps we don't have; treat that
-    # as "no venv" and let the agent fall back to py_compile, same as today.
-    inst = _run([py, "-m", "pip", "install", "--quiet", "-e", "."], cwd=clone_dir, timeout=1800)
+    # Editable install of the target package. --no-build-isolation is critical:
+    # without it pip creates a fresh isolated env (per PEP 517) and installs the
+    # *latest* setuptools there, ignoring the pinned legacy versions above --
+    # so the build crashes on the removed setuptools APIs we just worked around.
+    # --no-build-isolation makes pip use the venv's pinned build deps instead.
+    # Some repos need build deps we don't have; treat that as "no venv" and let
+    # the agent fall back to py_compile, same as today.
+    inst = _run(
+        [py, "-m", "pip", "install", "--quiet", "--no-build-isolation", "-e", "."],
+        cwd=clone_dir, timeout=1800,
+    )
     if inst.returncode != 0:
         print(f"  ! editable install failed: {inst.stderr.strip()[:200]}", flush=True)
         return False
