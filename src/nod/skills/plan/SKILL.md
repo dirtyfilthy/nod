@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Make a concise implementation plan before changing code or systems.
+description: Make a concise implementation plan before changing code or systems. Use when a task is broad, ambiguous, complex, risky, or likely to touch multiple files or systems; when the right approach is unclear or there are trade-offs to weigh; or before any change that could break something non-obvious. Skip for single-file edits with an obvious fix.
 ---
 
 # Plan

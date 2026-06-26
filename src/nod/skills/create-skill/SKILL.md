@@ -1,6 +1,6 @@
 ---
 name: create-skill
-description: Create a new nod skill in the standard SKILL.md format.
+description: Create a new nod skill in the standard SKILL.md format. Use when the user asks to add, write, or scaffold a skill, or when a reusable procedure keeps coming up that nod should apply consistently across sessions. Only make a skill for work that repeats and has stable steps; do not create one for a one-off task, a single fix, or anything involving secrets.
 ---
 
 # Create Skill
