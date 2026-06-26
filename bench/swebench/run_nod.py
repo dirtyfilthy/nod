@@ -125,6 +125,19 @@ def _prepare_venv(clone_dir: str, venv_dir: str) -> bool:
     if _run([py, "-m", "pip", "install", "--quiet", "--upgrade", "pip"], timeout=180).returncode != 0:
         # non-fatal; the install below will surface a real error if any
         pass
+    # Pin legacy build deps. SWE-bench base commits are often years old, and
+    # their setup_package.py files use setuptools APIs removed in setuptools
+    # 70+ (e.g. `from setuptools.dep_util import newer_group`, which astropy's
+    # wcs/setup_package.py imports). Modern setuptools crashes the build in
+    # the "Getting requirements" phase before the C compiler is even invoked.
+    # Pinning setuptools<70 + wheel + cython recreates the build env those
+    # repos were authored against.
+    if _run(
+        [py, "-m", "pip", "install", "--quiet", "setuptools<70", "wheel", "cython"],
+        timeout=600,
+    ).returncode != 0:
+        print("  ! legacy build deps install failed", flush=True)
+        return False
     # pytest first so it's available even if the package install fails.
     if _run([py, "-m", "pip", "install", "--quiet", "pytest"], timeout=600).returncode != 0:
         print("  ! pytest install failed", flush=True)
