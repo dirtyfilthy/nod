@@ -28,7 +28,12 @@ python bench/swebench/run_nod.py --count 5 --output preds.jsonl
 ```
 
 Useful flags: `--instance-ids astropy__astropy-12907 django__django-11099`,
-`--model <openrouter-model>`, `--max-turns 50`. Output is a JSONL of
+`--model <openrouter-model>`, `--max-turns 50`, `--no-install` (skip the
+per-instance venv + `pip install -e .`). By default a venv is created in the
+workdir and the package is installed editable so the agent can import it and
+run the test suite during generation; see
+`docs/swebench-generation-environment.md` for why that's fair on SWE-bench.
+Output is a JSONL of
 `{"instance_id", "model_patch", "model_name_or_path"}` — the official prediction
 format.
 

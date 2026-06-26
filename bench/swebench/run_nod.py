@@ -63,9 +63,35 @@ Rules:
   scripts, notes, repros), DELETE them before finishing so they don't leak into
   the patch. Only the actual fix should remain in the working tree.
 - When the fix is complete, reply with a one-line summary and stop calling tools.
+
+Using the venv:
+- A ready venv has been created for you at {venv_path} with the package
+  installed editable (`pip install -e .`) and pytest available. Run Python and
+  tests through that venv's interpreter: `{venv_path}/bin/python` and
+  `{venv_path}/bin/python -m pytest ...`.
+- The checkout is a source tree, not a system install. Importing the package
+  from the system `python3` will fail or import the wrong thing. Always use the
+  venv interpreter.
+- A `py_compile` pass is not evidence the patch works. If you genuinely cannot
+  run the real tests, say so explicitly and prefer a smaller, more obviously
+  correct change over a clever one you couldn't verify.
+- Do not create another venv, run `pip install` into the system Python, or
+  otherwise modify the environment. The venv is already set up.
 """
 
 PROMPT_TEMPLATE = """\
+Resolve the following issue in the repository in your current working directory.
+
+--- ISSUE ---
+{problem}
+--- END ISSUE ---
+
+Find the root cause, apply the minimal fix to the source (not the tests), and
+stop when done. The venv at {venv_path} has the package installed; use it to
+run the tests and verify your fix before finishing.
+"""
+
+PROMPT_TEMPLATE_NO_VENV = """\
 Resolve the following issue in the repository in your current working directory.
 
 --- ISSUE ---
@@ -81,6 +107,36 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> subproce
     return subprocess.run(
         cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout
     )
+
+
+def _prepare_venv(clone_dir: str, venv_dir: str) -> bool:
+    """Create a venv at venv_dir and install the checked-out package + pytest.
+
+    The venv lives outside the clone dir so it never leaks into `git diff`.
+    Returns True on success, False on failure (the caller falls back to letting
+    the agent work without an installable env, which is the current behavior).
+    """
+    print(f"  preparing venv at {venv_dir} ...", flush=True)
+    if _run(["python3", "-m", "venv", venv_dir], timeout=120).returncode != 0:
+        print("  ! venv create failed; proceeding without install", flush=True)
+        return False
+    py = os.path.join(venv_dir, "bin", "python")
+    # Upgrade pip quietly first; some old venv pips choke on wheel-only packages.
+    if _run([py, "-m", "pip", "install", "--quiet", "--upgrade", "pip"], timeout=180).returncode != 0:
+        # non-fatal; the install below will surface a real error if any
+        pass
+    # pytest first so it's available even if the package install fails.
+    if _run([py, "-m", "pip", "install", "--quiet", "pytest"], timeout=600).returncode != 0:
+        print("  ! pytest install failed", flush=True)
+        return False
+    # Editable install of the target package. This is the bit that makes the
+    # checkout importable. Some repos need build deps we don't have; treat that
+    # as "no venv" and let the agent fall back to py_compile, same as today.
+    inst = _run([py, "-m", "pip", "install", "--quiet", "-e", "."], cwd=clone_dir, timeout=1800)
+    if inst.returncode != 0:
+        print(f"  ! editable install failed: {inst.stderr.strip()[:200]}", flush=True)
+        return False
+    return True
 
 
 def load_instances(dataset: str, split: str, count: int, instance_ids: list[str] | None):
@@ -117,17 +173,23 @@ def build_bench_agent(
     base_url: str,
     max_turns: int,
     traces_dir: str | None,
+    venv_path: str | None = None,
 ) -> Agent:
     """Build the default nod instance used for SWE-bench generation."""
     cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
     provider = OpenAICompatibleProvider(model=cfg.model, base_url=cfg.base_url)
     skills = SkillLoader(cfg.resolved_skills_dirs())
+    if venv_path:
+        soul = SWE_SOUL.format(venv_path=venv_path)
+    else:
+        # No venv prepared -- strip the venv section so the soul doesn't lie.
+        soul = SWE_SOUL.format(venv_path="<no venv was prepared>").split("\nUsing the venv:")[0]
     return Agent(
         provider=provider,
         registry=ToolRegistry(builtin_tools()),
         memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
         skills=skills,
-        soul=SWE_SOUL,
+        soul=soul,
         max_turns=cfg.max_turns,
     )
 
@@ -140,6 +202,7 @@ def solve_instance(
     max_turns: int,
     workdir: str,
     traces_dir: str | None,
+    install: bool = True,
 ) -> dict:
     instance_id = inst["instance_id"]
     repo = inst["repo"]
@@ -147,8 +210,13 @@ def solve_instance(
     repo_url = f"https://github.com/{repo}.git"
 
     clone_dir = os.path.join(workdir, instance_id.replace("/", "__"))
+    # The venv lives in workdir, NOT inside clone_dir, so it can't leak into
+    # `git diff` (make_patch does `git add -A` so untracked files would show).
+    venv_dir = os.path.join(workdir, instance_id.replace("/", "__") + ".venv")
     if os.path.exists(clone_dir):
         shutil.rmtree(clone_dir)
+    if os.path.exists(venv_dir):
+        shutil.rmtree(venv_dir)
 
     print(f"  cloning {repo} @ {base_commit[:10]} ...", flush=True)
     clone = _run(["git", "clone", "--quiet", repo_url, clone_dir], timeout=900)
@@ -160,14 +228,25 @@ def solve_instance(
         print(f"  ! checkout failed: {co.stderr.strip()[:200]}", flush=True)
         return {"instance_id": instance_id, "model_patch": "", "model_name_or_path": f"nod-{model}"}
 
+    venv_path: str | None = None
+    if install:
+        if _prepare_venv(clone_dir, venv_dir):
+            venv_path = venv_dir
+        else:
+            shutil.rmtree(venv_dir, ignore_errors=True)
+
     agent = build_bench_agent(
         model=model,
         base_url=base_url,
         max_turns=max_turns,
         traces_dir=traces_dir,
+        venv_path=venv_path,
     )
 
-    prompt = PROMPT_TEMPLATE.format(problem=inst["problem_statement"])
+    if venv_path:
+        prompt = PROMPT_TEMPLATE.format(problem=inst["problem_statement"], venv_path=venv_path)
+    else:
+        prompt = PROMPT_TEMPLATE_NO_VENV.format(problem=inst["problem_statement"])
     prev = os.getcwd()
     os.chdir(clone_dir)
     try:
@@ -179,6 +258,7 @@ def solve_instance(
 
     patch = make_patch(clone_dir)
     shutil.rmtree(clone_dir, ignore_errors=True)
+    shutil.rmtree(venv_dir, ignore_errors=True)
     print(f"  patch: {len(patch)} chars", flush=True)
     return {
         "instance_id": instance_id,
@@ -199,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where repos are cloned (default: a temp dir).")
     parser.add_argument("--traces-dir", default=None, help="Write full per-instance chat traces as JSON files.")
+    parser.add_argument("--no-install", action="store_true", help="Don't create a venv or pip install the package before solving (the agent gets a bare clone, as before).")
     parser.add_argument("--dry-run", action="store_true", help="List the selected instances and exit (no model calls).")
     args = parser.parse_args(argv)
 
@@ -232,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_turns=args.max_turns,
                     workdir=workdir,
                     traces_dir=args.traces_dir,
+                    install=not args.no_install,
                 )
             except ProviderError as exc:
                 sys.exit(f"provider error (check key/model): {exc}")
