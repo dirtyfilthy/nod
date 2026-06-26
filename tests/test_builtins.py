@@ -373,6 +373,18 @@ def test_run_shell_returns_output_and_exit_code():
     assert "hello" in out
 
 
+def test_run_shell_interleaves_stdout_and_stderr():
+    # Print to stdout, then stderr, then stdout again. With separate pipes the
+    # returned text would be out-of-order (all stdout, then all stderr); with a
+    # single merged pipe the order is chronological.
+    cmd = "echo out1; echo err1 >&2; echo out2"
+    out = _registry().dispatch(
+        ToolCall(id="1", name="run_shell", arguments={"command": cmd})
+    )
+    assert out.startswith("exit code: 0")
+    assert out.index("out1") < out.index("err1") < out.index("out2")
+
+
 def test_run_shell_truncates_large_output_to_tmpfile():
     from nod.builtins import SHELL_MAX_LINES, _truncate_shell_output
 

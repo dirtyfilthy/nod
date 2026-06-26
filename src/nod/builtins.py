@@ -327,7 +327,7 @@ def list_dir_tool() -> Tool:
 def run_shell_tool() -> Tool:
     @tool(
         "run_shell",
-        "Run a shell command and return stdout, stderr, and the exit code.",
+        "Run a shell command and return its interleaved stdout/stderr and the exit code.",
         {
             "type": "object",
             "properties": {
@@ -344,14 +344,15 @@ def run_shell_tool() -> Tool:
             completed = subprocess.run(
                 command,
                 shell=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 timeout=SHELL_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
             return f"error: command timed out after {SHELL_TIMEOUT_SECONDS} seconds"
 
-        output = completed.stdout + completed.stderr
+        output = completed.stdout
         if not output:
             output = "(no output)"
         truncated, _ = _truncate_shell_output(output)
