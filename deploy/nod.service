@@ -5,6 +5,16 @@
 #   /var/lib/nod      working dir: config.toml + SOUL.md + memory/
 #   /etc/nod/nod.env  secrets (root:nod 0640): OPENROUTER_API_KEY, NOD_API_TOKEN
 #
+# Host prerequisite: the agent's run_shell tool spawns /bin/sh
+# non-interactively, where bash aliases never expand, so `python` won't
+# resolve unless it's a real executable on PATH. Create a host-level shim
+# pointing at the system interpreter -- deliberately NOT the venv, so the
+# service's own deps stay locked and the agent can't pip-install into its
+# own runtime:
+#   ln -s /usr/bin/python3 /usr/local/bin/python
+# /usr/local/bin is already on systemd's default service PATH, so no
+# Environment=PATH= edit is needed.
+#
 # `nod serve` reads config.toml from its working directory, hence
 # WorkingDirectory=/var/lib/nod. The unit on the box is rendered by Ansible;
 # this file is the in-repo reference.
