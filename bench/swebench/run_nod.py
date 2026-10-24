@@ -304,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--instance-ids", nargs="*", help="Specific instance ids to run.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    parser.add_argument("--max-turns", type=int, default=50)
+    parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where each instance's /testbed is copied (default: a temp dir).")
     parser.add_argument("--traces-dir", default=None, help="Write full per-instance chat traces as JSON files.")

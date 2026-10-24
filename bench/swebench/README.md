@@ -33,7 +33,7 @@ python bench/swebench/run_nod.py --count 5 --output preds.jsonl
 ```
 
 Useful flags: `--instance-ids astropy__astropy-12907 django__django-11099`,
-`--model <openrouter-model>`, `--max-turns 50`. See
+`--model <openrouter-model>`, `--max-turns 100` (the default). See
 `docs/swebench-generation-environment.md` for why letting nod run tests in the
 eval image is fair on SWE-bench. The images are x86; on an ARM machine Docker
 emulates them, which works but is slow. Output is a JSONL of
