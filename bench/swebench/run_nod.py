@@ -49,7 +49,7 @@ from nod.tools import ToolRegistry
 # `image` field; the older princeton-nlp mirror doesn't, and swebench>=5 can't
 # grade it.
 DEFAULT_DATASET = "SWE-bench/SWE-bench_Lite"
-DEFAULT_MODEL = "deepseek/deepseek-v3.2"
+DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 CONTAINER_WORKDIR = "/testbed"
 CONDA_ACTIVATE = "source /opt/miniconda3/bin/activate && conda activate testbed"

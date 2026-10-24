@@ -19,7 +19,7 @@ BUNDLED_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 @dataclass
 class Config:
-    model: str = "deepseek/deepseek-v3.2"
+    model: str = "deepseek/deepseek-v4.1-flash-1017"
     base_url: str = "https://openrouter.ai/api/v1"
     max_turns: int = 20
     soul_path: str = "SOUL.md"
@@ -31,7 +31,7 @@ class Config:
     host: str = "127.0.0.1"
     port: int = 8080
     compaction_enabled: bool = True
-    context_window: int = 128_000
+    context_window: int = 512_000
     reserve_tokens: int = 16_384
     keep_recent_tokens: int = 20_000
     # Directory the config was loaded from; relative paths resolve against it.

@@ -18,7 +18,7 @@ SUMMARY_TOOL_RESULT_LIMIT = 2000
 @dataclass(frozen=True)
 class CompactionConfig:
     enabled: bool = True
-    context_window: int = 128_000
+    context_window: int = 512_000
     reserve_tokens: int = 16_384
     keep_recent_tokens: int = 20_000
 

@@ -3,7 +3,7 @@
 # environment variable so secrets stay out of the repo.
 
 # The rented brain.
-model = "deepseek/deepseek-v3.2"
+model = "deepseek/deepseek-v4.1-flash-1017"
 base_url = "https://openrouter.ai/api/v1"
 
 # How many provider round-trips a single turn may take before giving up.
