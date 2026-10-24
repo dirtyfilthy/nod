@@ -70,9 +70,24 @@ Rules:
   Existing tests passing does NOT mean it is fixed; they usually don't cover the
   reported case. If your reproduction doesn't show the problem, re-read the
   issue for the case you missed rather than concluding nothing needs changing.
-- Make the minimal change that fixes the issue. Edit source files with
-  cud_file SEARCH/REPLACE blocks. Do NOT edit the test files.
+- Make the smallest change that lets the existing code handle the case. Fix
+  where the bad value or behavior originates, not where it surfaces downstream.
+  Keep the changed function's structure and return shape; don't rewrite it,
+  delegate it elsewhere, or add new dependencies, fallbacks, or features. If
+  you try a small fix and its output surprises you, work out why before
+  replacing it with something bigger.
+- Edit source files with cud_file SEARCH/REPLACE blocks. Do NOT edit the test
+  files.
+- After the fix, test beyond the issue's literal example: other inputs that
+  reach the same code (mixed or edge-case values, other invalid inputs, other
+  entry points), and every piece of state the changed code maintains, not just
+  the one that showed the bug. Assert the expected values, not merely that no
+  error is raised. If any result surprises you, explain it before moving on.
 - Also run the relevant existing tests with run_shell to check nothing broke.
+  Read verification output in full: don't pipe it through `head`, `tail`, or
+  `grep -v`, which can hide the failure or warning you're checking for.
+  run_shell already shortens long output and saves the full text to a file
+  you can read.
 - Do NOT run `git commit`, `git add`, or `git push`. Just leave your edits in the
   working tree; the harness captures the diff.
 - If you create any temporary or scratch files while investigating (helper
