@@ -25,13 +25,16 @@ is a real, officially-graded number, not a SOTA chase.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
+import multiprocessing
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from nod.agent import Agent
@@ -133,7 +136,7 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> subproce
     )
 
 
-def start_container(image: str, name: str, host_dir: str) -> bool:
+def start_container(image: str, name: str, host_dir: str, log=print) -> bool:
     """Start `name` from `image` with its /testbed mirrored at host_dir.
 
     /testbed is copied out rather than replaced with a fresh clone because the
@@ -144,10 +147,10 @@ def start_container(image: str, name: str, host_dir: str) -> bool:
     """
     _run(["docker", "rm", "-f", name])
     if _run(["docker", "image", "inspect", image]).returncode != 0:
-        print(f"  pulling {image} ...", flush=True)
+        log(f"pulling {image} ...")
         pull = _run(["docker", "pull", image], timeout=3600)
         if pull.returncode != 0:
-            print(f"  ! pull failed: {pull.stderr.strip()[:200]}", flush=True)
+            log(f"! pull failed: {pull.stderr.strip()[:200]}")
             return False
     steps = [
         ["docker", "create", "--name", name, image],
@@ -160,7 +163,7 @@ def start_container(image: str, name: str, host_dir: str) -> bool:
     for cmd in steps:
         result = _run(cmd, timeout=1800)
         if result.returncode != 0:
-            print(f"  ! {' '.join(cmd[:2])} failed: {result.stderr.strip()[:200]}", flush=True)
+            log(f"! {' '.join(cmd[:2])} failed: {result.stderr.strip()[:200]}")
             _run(["docker", "rm", "-f", name])
             return False
     return True
@@ -270,13 +273,17 @@ def solve_instance(
     instance_id = inst["instance_id"]
     empty = {"instance_id": instance_id, "model_patch": "", "model_name_or_path": f"nod-{model}"}
 
+    def log(msg: str) -> None:
+        # Prefixed so lines from instances solved in parallel stay attributable.
+        print(f"  [{instance_id}] {msg}", flush=True)
+
     repo_dir = os.path.join(workdir, instance_id.replace("/", "__"))
     container = f"nod-gen.{instance_id.lower()}"
     if os.path.exists(repo_dir):
         shutil.rmtree(repo_dir)
 
-    print(f"  starting {inst['image']} ...", flush=True)
-    if not start_container(inst["image"], container, repo_dir):
+    log(f"starting {inst['image']} ...")
+    if not start_container(inst["image"], container, repo_dir, log=log):
         shutil.rmtree(repo_dir, ignore_errors=True)
         return empty
     # The images add a "SWE-bench" commit on top of the base commit that only
@@ -286,7 +293,7 @@ def solve_instance(
     if raw.returncode != 0 or any(
         line.split()[2] != line.split()[3] for line in raw.stdout.splitlines()
     ):
-        print(f"  ! /testbed content differs from base commit {inst['base_commit'][:10]}", flush=True)
+        log(f"! /testbed content differs from base commit {inst['base_commit'][:10]}")
     base_tree = snapshot_tree(repo_dir)
 
     agent = build_bench_agent(
@@ -303,19 +310,45 @@ def solve_instance(
     try:
         agent.send(prompt, session_id=instance_id)
     except Exception as exc:  # noqa: BLE001 - one bad instance shouldn't kill the run
-        print(f"  ! agent error: {exc}", flush=True)
+        log(f"! agent error: {exc}")
     finally:
         os.chdir(prev)
 
     patch = make_patch(repo_dir, base_tree)
     _run(["docker", "rm", "-f", container])
     shutil.rmtree(repo_dir, ignore_errors=True)
-    print(f"  patch: {len(patch)} chars", flush=True)
+    log(f"patch: {len(patch)} chars")
     return {
         "instance_id": instance_id,
         "model_patch": patch,
         "model_name_or_path": f"nod-{model}",
     }
+
+
+def solve_all(rows: list[dict], solve, workers: int):
+    """Yield (instance, prediction) as each instance finishes, up to `workers` at once.
+
+    Workers are processes rather than threads because solve_instance chdirs into
+    the instance's repo so nod's file tools resolve relative paths there, and the
+    working directory is per process.
+    """
+    if workers <= 1:
+        for inst in rows:
+            yield inst, solve(inst)
+        return
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+        futures = {pool.submit(solve, inst): inst for inst in rows}
+        for future in as_completed(futures):
+            inst = futures[future]
+            try:
+                yield inst, future.result()
+            except ProviderError:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            except Exception as exc:  # noqa: BLE001 - one dead worker shouldn't kill the run
+                print(f"  [{inst['instance_id']}] ! worker failed: {exc}", flush=True)
+                yield inst, {"instance_id": inst["instance_id"], "model_patch": "", "model_name_or_path": ""}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -330,8 +363,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where each instance's /testbed is copied (default: a temp dir).")
     parser.add_argument("--traces-dir", default=None, help="Write full per-instance chat traces as JSON files.")
+    parser.add_argument("--workers", type=int, default=1, help="Instances to solve at once, each in its own process and container.")
     parser.add_argument("--dry-run", action="store_true", help="List the selected instances and exit (no model calls).")
     args = parser.parse_args(argv)
+    if args.workers < 1:
+        parser.error("--workers must be at least 1")
 
     rows = load_instances(args.dataset, args.split, args.count, args.instance_ids)
     if not rows:
@@ -353,23 +389,26 @@ def main(argv: list[str] | None = None) -> int:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    solve = functools.partial(
+        solve_instance,
+        model=args.model,
+        base_url=args.base_url,
+        max_turns=args.max_turns,
+        workdir=workdir,
+        traces_dir=args.traces_dir,
+    )
+    print(f"Solving with {args.workers} worker(s).", flush=True)
     started = time.monotonic()
     with out_path.open("w", encoding="utf-8") as fh:
-        for i, inst in enumerate(rows, 1):
-            print(f"[{i}/{len(rows)}] {inst['instance_id']}", flush=True)
-            try:
-                pred = solve_instance(
-                    inst,
-                    model=args.model,
-                    base_url=args.base_url,
-                    max_turns=args.max_turns,
-                    workdir=workdir,
-                    traces_dir=args.traces_dir,
-                )
-            except ProviderError as exc:
-                sys.exit(f"provider error (check key/model): {exc}")
-            fh.write(json.dumps(pred) + "\n")
-            fh.flush()
+        try:
+            # Written as each finishes, so a failed run keeps what completed.
+            for done, (inst, pred) in enumerate(solve_all(rows, solve, args.workers), 1):
+                pred["model_name_or_path"] = f"nod-{args.model}"
+                fh.write(json.dumps(pred) + "\n")
+                fh.flush()
+                print(f"[{done}/{len(rows)}] {inst['instance_id']} done", flush=True)
+        except ProviderError as exc:
+            sys.exit(f"provider error (check key/model): {exc}")
 
     elapsed = time.monotonic() - started
     print(f"\nWrote {len(rows)} predictions to {out_path} in {elapsed:.0f}s.")
