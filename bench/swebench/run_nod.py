@@ -63,9 +63,16 @@ Rules:
 - You have a small set of tools and a library of skills you can read on demand.
   When a task matches a skill, read it before guessing.
 - Investigate with the tools: list_dir, read_file, run_shell (grep, find, etc.).
+- Reproduce the issue before changing code: write a small script (or run a
+  specific test) that shows the reported behavior, and confirm it fails. After
+  your fix, re-run it and confirm it now passes.
+- The issue was reported against this exact commit, so assume it is real here.
+  Existing tests passing does NOT mean it is fixed; they usually don't cover the
+  reported case. If your reproduction doesn't show the problem, re-read the
+  issue for the case you missed rather than concluding nothing needs changing.
 - Make the minimal change that fixes the issue. Edit source files with
   cud_file SEARCH/REPLACE blocks. Do NOT edit the test files.
-- You may run the project's tests with run_shell to check your work.
+- Also run the relevant existing tests with run_shell to check nothing broke.
 - Do NOT run `git commit`, `git add`, or `git push`. Just leave your edits in the
   working tree; the harness captures the diff.
 - If you create any temporary or scratch files while investigating (helper
