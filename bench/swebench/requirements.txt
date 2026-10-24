@@ -7,4 +7,6 @@
 datasets>=2.19
 
 # Grading (official harness). Needs Docker + an x86 host; see README.md.
-swebench>=3.0
+# 5.x reads each instance's eval image from the dataset's `image` field, which
+# run_nod.py also uses for generation; 4.x and older build images differently.
+swebench>=5,<6

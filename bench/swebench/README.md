@@ -9,12 +9,17 @@ baseline number, not a leaderboard attempt.
 
 ## Two phases
 
-Patch generation and grading are separate. Only grading needs Docker.
+Patch generation and grading are separate, but both run in the same
+per-instance Docker images: the published SWE-bench eval images named in the
+dataset's `image` field.
 
-### Phase 1 — generate patches (no Docker)
+### Phase 1 — generate patches (Docker)
 
-Runs anywhere with git, network, and an OpenRouter key. For each instance nod
-clones the repo at its base commit, works the issue with its tools, and we
+Needs Docker, network, and an OpenRouter key. For each instance we pull its eval
+image, copy the image's `/testbed` (the repo at the base commit, already
+installed into the image's `testbed` conda env) to a host dir and bind-mount it
+back into a container. nod's file tools edit the host copy; `run_shell` runs
+inside the container with the env active, so nod can run the real tests. We
 capture `git diff` as the predicted patch.
 
 ```sh
@@ -28,18 +33,17 @@ python bench/swebench/run_nod.py --count 5 --output preds.jsonl
 ```
 
 Useful flags: `--instance-ids astropy__astropy-12907 django__django-11099`,
-`--model <openrouter-model>`, `--max-turns 50`, `--no-install` (skip the
-per-instance venv + `pip install -e .`). By default a venv is created in the
-workdir and the package is installed editable so the agent can import it and
-run the test suite during generation; see
-`docs/swebench-generation-environment.md` for why that's fair on SWE-bench.
-Output is a JSONL of
+`--model <openrouter-model>`, `--max-turns 50`. See
+`docs/swebench-generation-environment.md` for why letting nod run tests in the
+eval image is fair on SWE-bench. The images are x86; on an ARM machine Docker
+emulates them, which works but is slow. Output is a JSONL of
 `{"instance_id", "model_patch", "model_name_or_path"}` — the official prediction
 format.
 
 ### Phase 2 — grade (Docker, x86)
 
-The official harness applies each patch in a per-instance Docker container and
+The official harness applies each patch in a fresh container of the same
+per-instance image (images pulled in phase 1 are reused) and
 runs the repo's real test suite. This is the **only** credible scorer; we do not
 reimplement it. It needs Docker and is x86-centric (the images are flaky on ARM),
 so run it on an x86 box — e.g. the Hetzner deploy host once Docker is installed.
@@ -48,14 +52,14 @@ so run it on an x86 box — e.g. the Hetzner deploy host once Docker is installe
 # On the x86 + Docker host, with preds.jsonl copied over:
 pip install swebench
 python -m swebench.harness.run_evaluation \
-  --dataset_name princeton-nlp/SWE-bench_Lite \
+  --dataset_name SWE-bench/SWE-bench_Lite \
   --predictions_path preds.jsonl \
   --max_workers 4 \
   --run_id nod-smoke-1
 
 # Sanity-check the harness itself first with the gold patches:
 python -m swebench.harness.run_evaluation \
-  --dataset_name princeton-nlp/SWE-bench_Lite \
+  --dataset_name SWE-bench/SWE-bench_Lite \
   --predictions_path gold --max_workers 1 \
   --instance_ids sympy__sympy-20590 --run_id validate-gold
 ```
@@ -67,8 +71,11 @@ were wrong.
 
 ## Notes / caveats
 
-- **Disk + time:** even a smoke run pulls a Docker image per repo during grading;
-  budget several GB and minutes per instance.
+- **Disk + time:** every instance pulls its own eval image (shared layers per
+  repo/version, but still multiple GB per repo); budget disk accordingly.
+- **Dataset:** use `SWE-bench/SWE-bench_Lite`. The older
+  `princeton-nlp/SWE-bench_Lite` copy has no `image` field, and swebench 5.x
+  can't grade it.
 - **Tokens:** each instance is many model round-trips. Start with the 5-instance
   smoke before scaling.
 - **No test edits:** nod is instructed not to touch test files (the harness

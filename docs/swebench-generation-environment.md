@@ -51,7 +51,7 @@ Concretely, for nodgrader these are all fair:
   imports in generation.
 - Installing `pytest` and the repo's test dependencies into the generation
   environment.
-- Creating a venv for the work (see below).
+- Working inside the instance's prebuilt eval image (see below).
 - The agent running the repo's existing test suite to check its work before
   finishing.
 
@@ -71,32 +71,42 @@ leave only the fix in the working tree. Don't regress on that.
 
 ## What we do
 
-### 1. Install the target package into the generation environment
+### Generate inside the instance's eval image
 
-`bench/swebench/run_nod.py` now creates a venv per instance (in the workdir,
-outside the clone so it can't leak into `git diff`) and runs
-`pip install -e .` + `pytest` into it before handing control to the agent.
-The agent is told the venv path in its soul and prompt and runs tests through
-that interpreter. A `--no-install` flag keeps the old bare-clone behavior for
-comparison or when the install is known to fail.
+The first attempt at fixing this (a host venv per instance with
+`pip install -e .`) meant rebuilding each repo's environment by hand. It took
+eight reruns and a pile of legacy pins (`setuptools<70`, `extension_helpers`,
+`--no-build-isolation`) to get one astropy instance installing. It would have
+needed the same for every repo and version in the dataset, because the base
+commits span a decade of Python and dependency versions.
 
-This is the change that turns the `astropy__astropy-14182` failure mode from
-"confident patch, no verification, wrong" into "confident patch, ran the
-tests, found it wrong, tried again." If the editable install fails (missing
-build deps, etc.) it falls back to the old behavior and tells the agent no
-venv was prepared, rather than aborting the run.
+SWE-bench already publishes a working environment for every instance: the eval
+image the harness grades in, named in the dataset's `image` field. So
+`bench/swebench/run_nod.py` now uses those:
 
-### 2. Tell the agent, in its soul, to use venvs
+1. Pull the instance's image.
+2. Copy its `/testbed` out to a host dir. Copying, not cloning, keeps the build
+   artifacts of the installed package (compiled extensions, egg-info).
+3. Run a container from the image with that dir bind-mounted back at
+   `/testbed` (and at its own host path).
+4. nod's file tools edit the host copy. `run_shell` goes through
+   `docker exec` with the `testbed` conda env active, running as the host
+   user so files it creates stay editable from the host.
+5. The patch is the diff against a snapshot of `/testbed` as the image shipped
+   it, so untracked files from the image's install step stay out of the patch.
 
-The `SWE_SOUL` in `run_nod.py` now has a "Using the venv" section: the venv
-path, the instruction to run Python and pytest through that interpreter, the
-warning that the checkout is a source tree and importing from system `python3`
-will fail, the reminder that `py_compile` is not evidence the patch works, and
-the constraint not to create another venv or modify the environment.
+This is fair for the same reason the venv was: it's the setup SWE-agent treats
+as the intended condition, and the image's git history is already sanitized by
+the harness. It also means a test nod runs during generation behaves the same
+way it will at grading.
 
-The point isn't to script the agent's every move; it's to stop the failure
-mode where the agent hits an import error, mis-diagnoses it as "the
-environment is just broken", and ships an unverified patch.
+### Tell the agent about the environment
+
+`SWE_SOUL` in `run_nod.py` says where the repo is, that the env is already
+active in `run_shell`, to use repo-relative paths with the file tools, to run
+targeted tests (the shell timeout is 60s), and not to modify the environment.
+The aim is still to stop the failure mode where the agent hits an import error,
+decides "the environment is just broken", and ships an unverified patch.
 
 ## References
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import re
 import subprocess
@@ -324,7 +325,13 @@ def list_dir_tool() -> Tool:
     return list_dir
 
 
-def run_shell_tool() -> Tool:
+def run_shell_tool(argv: Callable[[str], list[str]] | None = None) -> Tool:
+    """Run commands through the local shell, or through ``argv(command)`` if given.
+
+    ``argv`` lets a caller route commands somewhere else (e.g. ``docker exec``)
+    while keeping the same timeout, output merging, and truncation.
+    """
+
     @tool(
         "run_shell",
         "Run a shell command and return its interleaved stdout/stderr and the exit code.",
@@ -342,8 +349,8 @@ def run_shell_tool() -> Tool:
     def run_shell(command: str) -> str:
         try:
             completed = subprocess.run(
-                command,
-                shell=True,
+                argv(command) if argv else command,
+                shell=argv is None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -391,11 +398,11 @@ def http_get_tool() -> Tool:
     return http_get
 
 
-def builtin_tools() -> list[Tool]:
+def builtin_tools(shell_argv: Callable[[str], list[str]] | None = None) -> list[Tool]:
     return [
         read_file_tool(),
         cud_file_tool(),
         list_dir_tool(),
-        run_shell_tool(),
+        run_shell_tool(shell_argv),
         http_get_tool(),
     ]

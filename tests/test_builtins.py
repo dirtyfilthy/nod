@@ -385,6 +385,22 @@ def test_run_shell_interleaves_stdout_and_stderr():
     assert out.index("out1") < out.index("err1") < out.index("out2")
 
 
+def test_run_shell_routes_through_argv_wrapper():
+    seen = []
+
+    def argv(command: str) -> list[str]:
+        seen.append(command)
+        return ["sh", "-c", f"echo wrapped; {command}"]
+
+    registry = ToolRegistry(builtin_tools(shell_argv=argv))
+    out = registry.dispatch(
+        ToolCall(id="1", name="run_shell", arguments={"command": "echo inner"})
+    )
+    assert seen == ["echo inner"]
+    assert out.startswith("exit code: 0")
+    assert out.index("wrapped") < out.index("inner")
+
+
 def test_run_shell_truncates_large_output_to_tmpfile():
     from nod.builtins import SHELL_MAX_LINES, _truncate_shell_output
 
