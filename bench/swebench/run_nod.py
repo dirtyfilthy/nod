@@ -253,9 +253,14 @@ def solve_instance(
     if not start_container(inst["image"], container, repo_dir):
         shutil.rmtree(repo_dir, ignore_errors=True)
         return empty
-    head = _run(["git", "-C", repo_dir, "rev-parse", "HEAD"]).stdout.strip()
-    if head != inst["base_commit"]:
-        print(f"  ! /testbed is at {head[:10]}, expected {inst['base_commit'][:10]}", flush=True)
+    # The images add a "SWE-bench" commit on top of the base commit that only
+    # flips file modes, so compare blob ids rather than commit ids. (core.fileMode
+    # doesn't apply to commit-to-commit diffs.)
+    raw = _run(["git", "-C", repo_dir, "diff", "--raw", "--no-abbrev", inst["base_commit"], "HEAD"])
+    if raw.returncode != 0 or any(
+        line.split()[2] != line.split()[3] for line in raw.stdout.splitlines()
+    ):
+        print(f"  ! /testbed content differs from base commit {inst['base_commit'][:10]}", flush=True)
     base_tree = snapshot_tree(repo_dir)
 
     agent = build_bench_agent(
