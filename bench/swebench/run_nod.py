@@ -78,13 +78,17 @@ Environment:
   The right Python, the project's dependencies, and the package itself are
   already installed in the `testbed` conda env.
 - run_shell runs inside that container with the env active and /testbed as the
-  working directory, so `python` and `python -m pytest` just work.
+  working directory, so `python` runs the right interpreter.
 - read_file, cud_file and list_dir see the same files. Give them paths relative
   to the repository root (e.g. `pkg/module.py`), not `/testbed/...`.
-- Verify your fix by running the relevant existing tests, e.g.
-  `python -m pytest path/to/test_file.py -x -q`, or the project's own runner
-  (Django: `./tests/runtests.py <module>`). Shell commands time out after
-  {shell_timeout} seconds, so run targeted tests, not the whole suite.
+- Verify your fix by running the relevant existing tests with the project's
+  own runner. pytest is NOT installed in every image, so use:
+  - Django: `./tests/runtests.py <test_module>` (e.g. `./tests/runtests.py utils_tests.test_text`)
+  - SymPy: `bin/test path/to/test_file.py`
+  - Most other projects: `python -m pytest path/to/test_file.py -x -q`
+  If a runner is missing, don't install it; switch to the project's runner.
+  Shell commands time out after {shell_timeout} seconds, so run targeted
+  tests, not the whole suite.
 - Do not pip install or otherwise modify the environment. The patch is graded
   in a fresh copy of this same image.
 """
