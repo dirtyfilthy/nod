@@ -11,6 +11,7 @@ import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 DEFAULT_CONFIG_NAMES = ("config.toml",)
 API_TOKEN_ENV = "NOD_API_TOKEN"
@@ -21,6 +22,12 @@ BUNDLED_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 class Config:
     model: str = "deepseek/deepseek-v4.1-flash-1017"
     base_url: str = "https://openrouter.ai/api/v1"
+    # OpenRouter provider routing, sent as the request's `provider` field. Pinned
+    # to DeepSeek's own deployment so runs aren't silently spread across hosts
+    # serving differently quantized copies. Empty sends nothing.
+    provider_routing: dict[str, Any] = field(
+        default_factory=lambda: {"order": ["deepseek"], "allow_fallbacks": False}
+    )
     max_turns: int = 20
     soul_path: str = "SOUL.md"
     memory_dir: str = "~/.nod/memory"
@@ -89,6 +96,9 @@ def load(path: str | Path | None = None) -> Config:
         for source, target in mapping.items():
             if source in compaction:
                 setattr(cfg, target, compaction[source])
+    routing = raw.get("provider_routing")
+    if isinstance(routing, dict):
+        cfg.provider_routing = routing
     return cfg
 
 

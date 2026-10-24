@@ -52,6 +52,7 @@ class OpenAICompatibleProvider:
         timeout: float = 120.0,
         deadline_seconds: float | None = 600.0,
         extra_headers: dict[str, str] | None = None,
+        provider_routing: dict[str, Any] | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -64,6 +65,9 @@ class OpenAICompatibleProvider:
         # Set to None to disable.
         self.deadline_seconds = deadline_seconds
         self.extra_headers = extra_headers or {}
+        # OpenRouter's `provider` request field (order, allow_fallbacks, ...).
+        # Pins which upstream serves the model; omitted from the request when empty.
+        self.provider_routing = provider_routing or {}
         if not self.api_key:
             raise ProviderError(
                 f"No API key. Set ${api_key_env} or pass api_key explicitly."
@@ -75,13 +79,7 @@ class OpenAICompatibleProvider:
         tools: list[dict[str, Any]] | None = None,
         on_token: OnToken | None = None,
     ) -> Message:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [m.to_provider_dict() for m in messages],
-            "stream": True,
-        }
-        if tools:
-            payload["tools"] = tools
+        payload = self._payload(messages, tools)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -111,6 +109,20 @@ class OpenAICompatibleProvider:
                     return self._consume(response.iter_lines(), on_token, deadline)
         except httpx.HTTPError as exc:
             raise ProviderError(f"request to provider failed: {exc}") from exc
+
+    def _payload(
+        self, messages: list[Message], tools: list[dict[str, Any]] | None
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [m.to_provider_dict() for m in messages],
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = tools
+        if self.provider_routing:
+            payload["provider"] = self.provider_routing
+        return payload
 
     def _consume(
         self,

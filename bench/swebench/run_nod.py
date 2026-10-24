@@ -249,7 +249,11 @@ def build_bench_agent(
 ) -> Agent:
     """Build the default nod instance used for SWE-bench generation."""
     cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
-    provider = OpenAICompatibleProvider(model=cfg.model, base_url=cfg.base_url)
+    provider = OpenAICompatibleProvider(
+        model=cfg.model,
+        base_url=cfg.base_url,
+        provider_routing=cfg.provider_routing,
+    )
     skills = SkillLoader(cfg.resolved_skills_dirs())
     return Agent(
         provider=provider,

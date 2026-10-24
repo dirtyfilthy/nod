@@ -23,7 +23,11 @@ from nod.tools import ToolRegistry
 
 
 def build_agent(cfg: Config) -> Agent:
-    provider = OpenAICompatibleProvider(model=cfg.model, base_url=cfg.base_url)
+    provider = OpenAICompatibleProvider(
+        model=cfg.model,
+        base_url=cfg.base_url,
+        provider_routing=cfg.provider_routing,
+    )
     memory = JSONFileMemory(cfg.memory_dir)
     skills = SkillLoader(cfg.resolved_skills_dirs())
     registry = ToolRegistry(builtin_tools())

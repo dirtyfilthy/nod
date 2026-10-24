@@ -6,6 +6,12 @@
 model = "deepseek/deepseek-v4.1-flash-1017"
 base_url = "https://openrouter.ai/api/v1"
 
+# OpenRouter provider routing, sent as the request's `provider` field. Pinned to
+# DeepSeek's own deployment with no fallbacks, so requests fail rather than land
+# on another host. Set to {} to let OpenRouter choose (or for non-OpenRouter
+# endpoints).
+provider_routing = { order = ["deepseek"], allow_fallbacks = false }
+
 # How many provider round-trips a single turn may take before giving up.
 max_turns = 20
 

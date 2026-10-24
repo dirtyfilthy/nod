@@ -76,3 +76,13 @@ def test_consume_within_deadline_succeeds():
         iter(CONTENT_LINES), None, deadline=100.0, now=lambda: 1.0
     )
     assert msg.content == "hello"
+
+
+def test_payload_includes_provider_routing():
+    routing = {"order": ["deepseek"], "allow_fallbacks": False}
+    p = OpenAICompatibleProvider(model="m", api_key="x", provider_routing=routing)
+    assert p._payload([], None)["provider"] == routing
+
+
+def test_payload_omits_provider_when_routing_empty():
+    assert "provider" not in _provider()._payload([], None)
