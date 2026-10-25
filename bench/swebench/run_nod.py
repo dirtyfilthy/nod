@@ -149,10 +149,14 @@ def _run(cmd: list[str], cwd: str | None = None, timeout: int = 600) -> subproce
 
 
 # Docker Hub allows 100 anonymous pulls per hour per IP. A full Lite run pulls
-# 300 images, faster than that, so a rate-limited pull waits for the window to
-# reset rather than failing the instance with an empty patch.
+# 300 images, faster than that, so a failed pull waits and retries rather than
+# failing the instance with an empty patch. The limit shows up in several
+# wordings ("toomanyrequests", "pull rate limit", or a bare "unexpected status
+# from HEAD request"), so every failure is retried except the few that can never
+# succeed.
 PULL_RATE_LIMIT_WAIT_SECONDS = 300
 PULL_RATE_LIMIT_MAX_WAIT_SECONDS = 2 * 3600
+PULL_PERMANENT_ERRORS = ("manifest unknown", "not found", "denied", "invalid reference")
 
 
 def pull_image(image: str, log=print, sleep=time.sleep) -> bool:
@@ -162,11 +166,12 @@ def pull_image(image: str, log=print, sleep=time.sleep) -> bool:
         if pull.returncode == 0:
             return True
         err = pull.stderr.strip()
-        if "toomanyrequests" not in err or waited >= PULL_RATE_LIMIT_MAX_WAIT_SECONDS:
-            log(f"! pull failed: {err[:200]}")
+        permanent = any(marker in err.lower() for marker in PULL_PERMANENT_ERRORS)
+        if permanent or waited >= PULL_RATE_LIMIT_MAX_WAIT_SECONDS:
+            log(f"! pull failed: {err[:500]}")
             return False
-        log(f"Docker Hub rate limit hit; retrying in {PULL_RATE_LIMIT_WAIT_SECONDS // 60} min "
-            f"({waited // 60} min waited so far)")
+        log(f"pull failed, likely Docker Hub's rate limit; retrying in "
+            f"{PULL_RATE_LIMIT_WAIT_SECONDS // 60} min ({waited // 60} min waited so far): {err[:300]}")
         sleep(PULL_RATE_LIMIT_WAIT_SECONDS)
         waited += PULL_RATE_LIMIT_WAIT_SECONDS
 

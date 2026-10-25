@@ -135,9 +135,10 @@ def test_pull_image_waits_out_docker_hub_rate_limit(monkeypatch):
     import subprocess
 
     run_nod = _load_run_nod_module()
+    # The wordings seen on the box; none says "toomanyrequests".
     results = iter([
-        subprocess.CompletedProcess([], 1, "", "toomanyrequests: You have reached your unauthenticated pull rate limit."),
-        subprocess.CompletedProcess([], 1, "", "toomanyrequests: You have reached your unauthenticated pull rate limit."),
+        subprocess.CompletedProcess([], 1, "", "error from registry: You have reached your unauthenticated pull rate limit."),
+        subprocess.CompletedProcess([], 1, "", 'Error response from daemon: unknown: failed to resolve reference "docker.io/x:latest": unexpected status from HEAD request to https://registry-1.docker.io/v2/x/manifests/latest: 429 Too Many Requests'),
         subprocess.CompletedProcess([], 0, "", ""),
     ])
     monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: next(results))
@@ -151,8 +152,10 @@ def test_pull_image_gives_up_on_other_errors_and_after_max_wait(monkeypatch):
     import subprocess
 
     run_nod = _load_run_nod_module()
-    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: subprocess.CompletedProcess([], 1, "", "manifest unknown"))
-    assert not run_nod.pull_image("img", log=lambda m: None, sleep=lambda s: None)
+    slept = []
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: subprocess.CompletedProcess([], 1, "", "Error response from daemon: manifest unknown"))
+    assert not run_nod.pull_image("img", log=lambda m: None, sleep=slept.append)
+    assert slept == []  # permanent errors fail at once
 
     monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: subprocess.CompletedProcess([], 1, "", "toomanyrequests"))
     slept = []
