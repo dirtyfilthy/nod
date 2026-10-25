@@ -99,6 +99,15 @@ Rules:
   entry points), and every piece of state the changed code maintains, not just
   the one that showed the bug. Assert the expected values, not merely that no
   error is raised. If any result surprises you, explain it before moving on.
+- If you think of a case where your fix might fail (an input, a code path, a
+  test the maintainers would likely write), run it or handle it. Never note a
+  likely failure and move on: "probably fine" is not verification.
+- Follow the surrounding code's conventions. Before choosing, look at how
+  comparable code in the repository does it, and match it: return the same
+  kinds of objects neighbouring code returns (the library's own types and
+  singletons, not raw Python values), the same error behavior (binary operators
+  return NotImplemented for unsupported operands), existing deprecation and
+  warning paths, and the output format of similar functions.
 - Also run the relevant existing tests with run_shell to check nothing broke.
   Read verification output in full: don't pipe it through `head`, `tail`, or
   `grep -v`, which can hide the failure or warning you're checking for.
@@ -115,6 +124,10 @@ Rules:
 Environment:
 - You have no internet access, so don't try to fetch code, issues, or packages.
   Work from the repository in front of you.
+- If you remember how this was fixed upstream, treat that as an unverified
+  guess and check it against the code and your tests; remembered upstream
+  changes are often wrong. Don't search the filesystem for other copies of the
+  project, its tests, or the issue: there are none, and searching wastes turns.
 - The repository is at /testbed inside this instance's SWE-bench Docker image.
   The right Python, the project's dependencies, and the package itself are
   already installed in the `testbed` conda env.
