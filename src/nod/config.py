@@ -28,6 +28,9 @@ class Config:
     provider_routing: dict[str, Any] = field(
         default_factory=lambda: {"order": ["deepseek"], "allow_fallbacks": False}
     )
+    # OpenRouter's `reasoning` request field, e.g. {"effort": "high"}. Empty sends
+    # nothing and leaves the model's default.
+    reasoning: dict[str, Any] = field(default_factory=dict)
     max_turns: int = 20
     soul_path: str = "SOUL.md"
     memory_dir: str = "~/.nod/memory"
@@ -99,6 +102,9 @@ def load(path: str | Path | None = None) -> Config:
     routing = raw.get("provider_routing")
     if isinstance(routing, dict):
         cfg.provider_routing = routing
+    reasoning = raw.get("reasoning")
+    if isinstance(reasoning, dict):
+        cfg.reasoning = reasoning
     return cfg
 
 

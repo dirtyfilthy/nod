@@ -49,6 +49,12 @@ class Message:
 
     `role` is one of: system, user, assistant, tool. Only the fields relevant to a
     given role are populated; the serialization drops the rest.
+
+    `reasoning` is a thinking model's chain of thought for an assistant reply, and
+    `reasoning_details` the provider's structured form of it (OpenRouter's
+    `reasoning_details`), kept exactly as received. Both are stored and sent back:
+    in a tool loop, thinking models such as DeepSeek's expect their earlier
+    reasoning in later requests so they can continue it.
     """
 
     role: str
@@ -57,6 +63,8 @@ class Message:
     tool_call_id: str | None = None
     id: str | None = None
     kind: str = "message"
+    reasoning: str = ""
+    reasoning_details: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def text(self) -> str:
@@ -69,6 +77,15 @@ class Message:
             out["tool_calls"] = [tc.to_provider_dict() for tc in self.tool_calls]
         if self.tool_call_id is not None:
             out["tool_call_id"] = self.tool_call_id
+        if self.role == "assistant":
+            # Structured details go back verbatim when the provider sent them
+            # (OpenRouter requires them unmodified). Otherwise the plain text goes
+            # back as `reasoning_content`, which DeepSeek's API and vLLM read and
+            # OpenRouter treats as an alias of `reasoning`.
+            if self.reasoning_details:
+                out["reasoning_details"] = self.reasoning_details
+            elif self.reasoning:
+                out["reasoning_content"] = self.reasoning
         return out
 
     def to_storage_dict(self) -> dict[str, Any]:
@@ -82,6 +99,8 @@ class Message:
                 for tc in self.tool_calls
             ],
             "tool_call_id": self.tool_call_id,
+            "reasoning": self.reasoning,
+            "reasoning_details": self.reasoning_details,
         }
 
     @classmethod
@@ -96,6 +115,8 @@ class Message:
             tool_call_id=raw.get("tool_call_id"),
             id=raw.get("id"),
             kind=raw.get("kind", "message"),
+            reasoning=raw.get("reasoning", "") or "",
+            reasoning_details=raw.get("reasoning_details") or [],
         )
 
 

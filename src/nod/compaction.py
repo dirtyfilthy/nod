@@ -116,7 +116,8 @@ Keep each section concise. Preserve exact file paths, function names, and error 
 
 def estimate_tokens(message: Message) -> int:
     """Rough chars/4 token estimate, good enough for cut-point selection."""
-    chars = len(message.content or "")
+    # Reasoning is sent back with the message, so it occupies context too.
+    chars = len(message.content or "") + len(message.reasoning or "")
     if message.tool_calls:
         chars += len(
             json.dumps(

@@ -39,7 +39,9 @@ class OpenAICompatibleProvider:
     """Default brain: any OpenAI-compatible chat-completions endpoint.
 
     Streams the response so tokens can be surfaced live via `on_token`, and
-    reassembles streamed tool-call deltas into whole `ToolCall`s.
+    reassembles streamed tool-call deltas into whole `ToolCall`s. A thinking
+    model's streamed reasoning is collected onto the returned message (never
+    passed to `on_token`) so the agent can store it and send it back.
     """
 
     def __init__(
@@ -53,6 +55,7 @@ class OpenAICompatibleProvider:
         deadline_seconds: float | None = 600.0,
         extra_headers: dict[str, str] | None = None,
         provider_routing: dict[str, Any] | None = None,
+        reasoning: dict[str, Any] | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -68,6 +71,9 @@ class OpenAICompatibleProvider:
         # OpenRouter's `provider` request field (order, allow_fallbacks, ...).
         # Pins which upstream serves the model; omitted from the request when empty.
         self.provider_routing = provider_routing or {}
+        # OpenRouter's `reasoning` request field, e.g. {"effort": "high"} or
+        # {"enabled": False}. Omitted when empty, leaving the model's default.
+        self.reasoning = reasoning or {}
         if not self.api_key:
             raise ProviderError(
                 f"No API key. Set ${api_key_env} or pass api_key explicitly."
@@ -122,6 +128,8 @@ class OpenAICompatibleProvider:
             payload["tools"] = tools
         if self.provider_routing:
             payload["provider"] = self.provider_routing
+        if self.reasoning:
+            payload["reasoning"] = self.reasoning
         return payload
 
     def _consume(
@@ -139,7 +147,9 @@ class OpenAICompatibleProvider:
         """
 
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_acc = _ToolCallAccumulator()
+        details_acc = _ReasoningDetailsAccumulator()
         for line in lines:
             if deadline is not None and now() >= deadline:
                 raise ProviderError(
@@ -156,11 +166,20 @@ class OpenAICompatibleProvider:
                     on_token(text)
             for tc in delta.get("tool_calls", []) or []:
                 tool_acc.add(tc)
+            # OpenRouter streams `reasoning`; DeepSeek's API and vLLM use
+            # `reasoning_content`.
+            thought = delta.get("reasoning") or delta.get("reasoning_content")
+            if thought:
+                reasoning_parts.append(thought)
+            for detail in delta.get("reasoning_details", []) or []:
+                details_acc.add(detail)
 
         return Message(
             role="assistant",
             content="".join(content_parts),
             tool_calls=tool_acc.finish(),
+            reasoning="".join(reasoning_parts),
+            reasoning_details=details_acc.finish(),
         )
 
 
@@ -222,3 +241,36 @@ class _ToolCallAccumulator:
                 )
             )
         return calls
+
+
+class _ReasoningDetailsAccumulator:
+    """Merges streamed `reasoning_details` chunks back into whole blocks.
+
+    Each chunk carries a fragment of one block, keyed by `index`; text-like fields
+    concatenate in order and the rest (type, format, id) keep their last value.
+    The merged blocks are what OpenRouter expects back, unmodified.
+    """
+
+    _APPEND = ("text", "summary", "data", "signature")
+
+    def __init__(self) -> None:
+        self._by_index: dict[int, dict[str, Any]] = {}
+        self._order: list[int] = []
+
+    def add(self, fragment: dict[str, Any]) -> None:
+        index = fragment.get("index", 0)
+        block = self._by_index.get(index)
+        if block is None:
+            self._by_index[index] = dict(fragment)
+            self._order.append(index)
+            return
+        for key, value in fragment.items():
+            if value is None:
+                continue
+            if key in self._APPEND and isinstance(value, str):
+                block[key] = (block.get(key) or "") + value
+            else:
+                block[key] = value
+
+    def finish(self) -> list[dict[str, Any]]:
+        return [self._by_index[index] for index in self._order]

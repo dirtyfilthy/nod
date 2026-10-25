@@ -86,3 +86,58 @@ def test_payload_includes_provider_routing():
 
 def test_payload_omits_provider_when_routing_empty():
     assert "provider" not in _provider()._payload([], None)
+
+
+REASONING_LINES = [
+    'data: {"choices":[{"delta":{"reasoning":"Need ","reasoning_details":[{"type":"reasoning.text","text":"Need ","format":"unknown","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"reasoning":"to look.","reasoning_details":[{"type":"reasoning.text","text":"to look.","format":"unknown","index":0}]}}]}',
+    'data: {"choices":[{"delta":{"content":"ok"}}]}',
+    "data: [DONE]",
+]
+
+
+def test_consume_collects_reasoning_and_merges_details():
+    msg = _provider()._consume(iter(REASONING_LINES), None, deadline=None)
+    assert msg.content == "ok"
+    assert msg.reasoning == "Need to look."
+    assert msg.reasoning_details == [
+        {"type": "reasoning.text", "text": "Need to look.", "format": "unknown", "index": 0}
+    ]
+
+
+def test_consume_never_streams_reasoning_to_on_token():
+    tokens: list[str] = []
+    _provider()._consume(iter(REASONING_LINES), tokens.append, deadline=None)
+    assert tokens == ["ok"]
+
+
+def test_consume_reads_reasoning_content_alias():
+    lines = ['data: {"choices":[{"delta":{"reasoning_content":"hmm"}}]}', "data: [DONE]"]
+    msg = _provider()._consume(iter(lines), None, deadline=None)
+    assert msg.reasoning == "hmm"
+    assert msg.reasoning_details == []
+
+
+def test_reasoning_details_accumulator_keeps_blocks_and_appends_signature():
+    from nod.provider import _ReasoningDetailsAccumulator
+
+    acc = _ReasoningDetailsAccumulator()
+    acc.add({"type": "reasoning.text", "text": "a", "index": 0})
+    acc.add({"type": "reasoning.encrypted", "data": "x", "index": 1})
+    acc.add({"text": "b", "signature": "s1", "index": 0})
+    acc.add({"data": "y", "id": "r2", "index": 1})
+    acc.add({"signature": "s2", "index": 0})
+
+    assert acc.finish() == [
+        {"type": "reasoning.text", "text": "ab", "signature": "s1s2", "index": 0},
+        {"type": "reasoning.encrypted", "data": "xy", "id": "r2", "index": 1},
+    ]
+
+
+def test_payload_includes_reasoning_when_set():
+    p = OpenAICompatibleProvider(model="m", api_key="x", reasoning={"effort": "high"})
+    assert p._payload([], None)["reasoning"] == {"effort": "high"}
+
+
+def test_payload_omits_reasoning_by_default():
+    assert "reasoning" not in _provider()._payload([], None)

@@ -69,3 +69,9 @@ def test_compact_if_needed_summarizes_over_budget():
     assert result.messages[0].kind == "compaction_summary"
     assert result.messages[1] is recent
     assert provider.calls[0][0].role == "system"
+
+
+def test_estimate_tokens_counts_reasoning_sent_back():
+    plain = assistant("ok")
+    thinking = Message(role="assistant", content="ok", reasoning="x" * 400)
+    assert estimate_tokens(thinking) >= estimate_tokens(plain) + 100

@@ -12,6 +12,12 @@ base_url = "https://openrouter.ai/api/v1"
 # endpoints).
 provider_routing = { order = ["deepseek"], allow_fallbacks = false }
 
+# OpenRouter's `reasoning` request field for thinking models, e.g.
+# { effort = "high" } or { enabled = false }. Empty leaves the model's default.
+# Whatever the model reasons is stored with the conversation and sent back on
+# later requests, which DeepSeek's thinking mode requires during tool calls.
+reasoning = {}
+
 # How many provider round-trips a single turn may take before giving up.
 max_turns = 20
 

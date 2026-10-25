@@ -27,6 +27,7 @@ def build_agent(cfg: Config) -> Agent:
         model=cfg.model,
         base_url=cfg.base_url,
         provider_routing=cfg.provider_routing,
+        reasoning=cfg.reasoning,
     )
     memory = JSONFileMemory(cfg.memory_dir)
     skills = SkillLoader(cfg.resolved_skills_dirs())

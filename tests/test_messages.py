@@ -63,3 +63,41 @@ def test_from_provider_dict_handles_bad_json():
         {"id": "x", "function": {"name": "f", "arguments": "{not json"}}
     )
     assert tc.arguments == {"_raw": "{not json"}
+
+
+def test_assistant_sends_reasoning_details_back_verbatim():
+    details = [{"type": "reasoning.text", "text": "think", "format": "unknown", "index": 0}]
+    msg = Message(role="assistant", content="", reasoning="think", reasoning_details=details)
+
+    d = msg.to_provider_dict()
+
+    assert d["reasoning_details"] == details
+    assert "reasoning_content" not in d
+
+
+def test_assistant_sends_plain_reasoning_as_reasoning_content():
+    d = Message(role="assistant", content="ok", reasoning="think").to_provider_dict()
+    assert d["reasoning_content"] == "think"
+    assert "reasoning_details" not in d
+
+
+def test_non_assistant_and_reasonless_messages_send_no_reasoning():
+    for msg in (user("hi"), tool_result("c1", "x"), assistant("plain")):
+        d = msg.to_provider_dict()
+        assert "reasoning_content" not in d and "reasoning_details" not in d
+
+
+def test_storage_round_trip_keeps_reasoning():
+    details = [{"type": "reasoning.text", "text": "think", "index": 0}]
+    msg = Message(role="assistant", content="ok", reasoning="think", reasoning_details=details)
+
+    restored = Message.from_storage_dict(msg.to_storage_dict())
+
+    assert restored.reasoning == "think"
+    assert restored.reasoning_details == details
+
+
+def test_old_storage_without_reasoning_still_loads():
+    restored = Message.from_storage_dict({"role": "assistant", "content": "hi"})
+    assert restored.reasoning == ""
+    assert restored.reasoning_details == []

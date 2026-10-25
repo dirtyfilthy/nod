@@ -135,3 +135,26 @@ def test_start_of_turn_compaction_is_persisted():
         "recent",
         "next",
     ]
+
+
+def test_reasoning_is_sent_back_on_later_steps_and_stored():
+    registry, _ = _registry_with_echo()
+    details = [{"type": "reasoning.text", "text": "use echo", "format": "unknown", "index": 0}]
+    first = Message(
+        role="assistant",
+        reasoning="use echo",
+        reasoning_details=details,
+        tool_calls=[ToolCall(id="c1", name="echo", arguments={"text": "hi"})],
+    )
+    provider = FakeProvider([first, assistant("done")])
+    memory = InMemoryMemory()
+    agent = Agent(provider=provider, registry=registry, memory=memory)
+
+    agent.send("go", session_id="s1")
+
+    # The second request carries the first step's reasoning, as DeepSeek's
+    # thinking mode requires within a tool loop.
+    sent = [m.to_provider_dict() for m in provider.calls[1] if m.role == "assistant"]
+    assert sent[0]["reasoning_details"] == details
+    stored = [m for m in memory.load("s1") if m.role == "assistant"]
+    assert stored[0].reasoning == "use echo"
