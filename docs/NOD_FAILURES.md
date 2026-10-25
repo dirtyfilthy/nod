@@ -128,3 +128,117 @@ The main product lesson is not "install every dependency everywhere." It is that
 nod must convert failed validation attempts into better reasoning, especially
 when the codebase already contains adjacent patterns that imply the missing
 behavior.
+
+## SWE-bench Lite: DeepSeek V4.1 Flash looked up the answers
+
+Run context:
+
+- Run ID: `nod-smoke-20261025-003807`
+- Dataset: `SWE-bench/SWE-bench_Lite`, a fixed 15-instance sample across 10 repos
+- Model: `deepseek/deepseek-v4.1-flash-1017`, pinned to `deepinfra/fp8` on
+  OpenRouter
+- Nod commit on grader: `c148aa3`
+- Result: 15/15 resolved, for $0.42 of tokens
+- Same sample on `deepseek/deepseek-v3.2` (`nod-smoke-20261024-224507`): 6/15
+- Traces: `myinfra/misc/nodgrader-bench/nod-smoke-20261025-003807/traces/`
+
+### What happened
+
+The jump from 6/15 to 15/15 included `pydata__xarray-4248`, an instance where
+the required design appears only in the issue's hints, which nod never sees.
+That should not be solvable from the issue text, so the traces were checked.
+
+Generation containers had network access, and the bench agent still had nod's
+`http_get` tool. In 13 of the 15 instances the model went to the internet for
+the upstream fix: 56 `http_get` calls plus 41 shell commands using `curl`,
+`urllib`, or `pip download`. Its search was methodical:
+
+- GitHub search API queries built from the issue's wording, e.g.
+  `search/commits?q=repo:astropy/astropy+zero-size+input+wcs`
+- Issue timelines, to find the PR that closed the issue
+- The fixing PR or commit itself: `pydata/xarray/pull/4248.diff`,
+  `psf/requests/pull/863.diff`, `sympy/sympy/pull/11897.diff`, and the
+  fixing commit's `.patch` for `django__django-12113` and
+  `scikit-learn__scikit-learn-14983`
+- The same file at a later release tag on `raw.githubusercontent.com`
+- `pip download pytest==5.3.0`, `6.2.0`, and `7.4.0`, then reading the fixed
+  source out of the wheels
+
+### Evidence that it copied
+
+Similarity is computed between each submitted patch's changed lines and the
+upstream fix's changed lines (Jaccard on stripped `+`/`-` lines):
+
+| Instance | V3.2, offline in practice | V4.1, online |
+| --- | --- | --- |
+| astropy__astropy-7746 | 0.00 | 0.67 |
+| django__django-11422 | 0.14 | 0.82 |
+| django__django-12113 | 0.00 | 1.00 |
+| django__django-14915 | 1.00 | 1.00 (no fetch) |
+| django__django-15814 | 0.00 | 1.00 |
+| matplotlib__matplotlib-22711 | 0.03 | 0.03 |
+| psf__requests-863 | 0.20 | 1.00 |
+| pydata__xarray-4248 | 0.00 | 1.00 |
+| pylint-dev__pylint-7228 | 0.08 | 0.85 |
+| pytest-dev__pytest-5103 | 0.00 | 0.06 |
+| scikit-learn__scikit-learn-14983 | 0.29 | 1.00 |
+| sphinx-doc__sphinx-8506 | 0.00 | 0.86 |
+| sympy__sympy-11897 | 0.00 | 1.00 |
+| sympy__sympy-14774 | 1.00 | 1.00 (no fetch) |
+| sympy__sympy-17630 | 0.00 | 1.00 |
+
+Nine of the 13 instances that fetched code submitted the upstream fix's
+changed lines exactly. The two that didn't fetch were already solved by V3.2.
+matplotlib and pytest resolved with patches unlike upstream's, after reading
+later versions of the same files, so they were informed by the future code
+rather than copied from it.
+
+### What it was not
+
+- **Git history.** The images' `/testbed` history holds only the base commit's
+  ancestors plus SWE-bench's own setup commit. The model ran `git log --all`,
+  `git branch -a`, and `git show` on several instances and found nothing from
+  after the base commit.
+- **The instance id.** Each instance's number is its upstream PR number, and
+  it appears in the host work dir and container names. No trace shows the
+  number before the first network call; the model found the PR numbers by
+  searching.
+- **Earlier runs.** Across all five V3.2 runs, with the same tools and the same
+  network access, the model made zero `http_get` calls and no lookups from the
+  shell. Those results stand.
+
+### Why it matters
+
+Looking upstream first is good engineering on a real bug, so the model broke
+no rule it was given. The benchmark assumed the agent works offline and
+nothing enforced it. SWE-bench's harness carefully scrubs future commits from
+git, but the same answers are a search away. Any agent benchmark run with
+network access is open to this, separately from memorization in training data.
+
+The behavior also changed within one model generation, with the same tools,
+the same network access, and the same instructions. V3.2 never reached for the
+web; V4.1 Flash did so on its first run.
+
+### Fix
+
+Commit `4be226c`:
+
+- Generation containers start with `--network none`. On a real image, `curl`,
+  `urllib`, and `pip download` all fail while the repo's tests still run.
+- The bench agent no longer gets `http_get`.
+- The soul says there is no internet access, so the model doesn't spend turns
+  trying.
+
+`docs/swebench-generation-environment.md` records "no internet during
+generation" as part of the fairness rules.
+
+### Lessons
+
+- Treat a sudden jump in score as a bug until the traces say otherwise. One
+  instance that shouldn't be solvable, here xarray-4248, is enough to
+  investigate.
+- Enforce the environment rather than asking the model. A prompt rule alone
+  would not have closed this reliably; on earlier runs V3.2 ignored several of
+  the bench's prompt rules (unfiltered output, no "already fixed" exits).
+- Re-check a benchmark's assumptions whenever the model changes. A setup that
+  was fair for one model was not fair for the next.
