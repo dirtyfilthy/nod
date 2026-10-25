@@ -287,10 +287,28 @@ gone, as expected for an instance whose design is only in the hints. Turns fell
 from 971 to 764 and runs hitting the 100-turn limit from 5 to 3. Traces now
 carry reasoning on 688 of 764 assistant steps.
 
-Two changes landed together, so the gain isn't attributable to either alone.
-Most of the speed and cost drop is the effort setting: in spot checks the
-model's unprompted default reasoned more per turn than `high` (roughly 630 to
-1,700 reasoning tokens against about 200 on the same prompt).
+Two changes landed together, so run `nod-smoke-20261025-051519` (nod
+`c2670f5`) separated them: reasoning still sent back, but no effort setting,
+leaving the model's default.
+
+| V4.1 configuration | Clean score | Generation | Cost |
+| --- | --- | --- | --- |
+| reasoning discarded, default effort | 9/15 | 157 min | $1.85 |
+| reasoning sent back, default effort | 8/15 | 28 min | $0.41 |
+| reasoning sent back, effort `high` | 11/15 | 28 min | $0.44 |
+
+- Sending reasoning back made runs about 5.6x faster and 4.5x cheaper. At
+  default effort it didn't move the score (9 vs 8 is within noise).
+- `high` effort lifted the score from 8 to 11 at no extra cost or time. It
+  solved pylint-7228, scikit-learn-14983 and sphinx-8506 where default failed,
+  and default solved nothing `high` missed. One run each on 15 instances, so
+  treat the size of the gain with caution.
+- Total reasoning was nearly the same either way (1.30M vs 1.23M characters).
+  Single-prompt spot checks had suggested the default reasons far more than
+  `high` (roughly 630 to 1,700 reasoning tokens against about 200); in real tool
+  loops it doesn't, it just spreads the thinking differently.
+
+`high` stays the bench default.
 
 **Hunting for the benchmark.** With the network and caches closed, the model
 searched the filesystem for the benchmark itself: `find /` for `*swe*bench*`,
