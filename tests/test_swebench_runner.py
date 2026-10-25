@@ -36,17 +36,26 @@ def test_bench_agent_loads_system_skills(monkeypatch):
 def _chdir_and_report(inst):
     # Module-level so the spawned worker processes can unpickle it.
     os.chdir(inst["dir"])
-    time.sleep(0.3)  # overlap with the other workers
-    return {"instance_id": inst["instance_id"], "model_patch": os.getcwd(), "pid": os.getpid()}
+    # Barrier: wait (bounded) until every job has started. Sequential execution
+    # can never get past it, so `all_started` proves the jobs ran at once without
+    # depending on timing.
+    Path(inst["barrier"], inst["instance_id"]).touch()
+    deadline = time.monotonic() + 30
+    while len(os.listdir(inst["barrier"])) < inst["n"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    all_started = len(os.listdir(inst["barrier"])) == inst["n"]
+    return {"instance_id": inst["instance_id"], "model_patch": os.getcwd(), "all_started": all_started}
 
 
 def test_solve_all_parallel_workers_keep_their_own_cwd(tmp_path):
     run_nod = _load_run_nod_module()
+    barrier = tmp_path / "barrier"
+    barrier.mkdir()
     rows = []
     for i in range(4):
         d = tmp_path / f"inst{i}"
         d.mkdir()
-        rows.append({"instance_id": f"inst{i}", "dir": str(d)})
+        rows.append({"instance_id": f"inst{i}", "dir": str(d), "barrier": str(barrier), "n": 4})
 
     cwd = os.getcwd()
     results = dict(
@@ -58,7 +67,7 @@ def test_solve_all_parallel_workers_keep_their_own_cwd(tmp_path):
     assert set(results) == {r["instance_id"] for r in rows}
     for row in rows:
         assert os.path.realpath(results[row["instance_id"]]["model_patch"]) == os.path.realpath(row["dir"])
-    assert len({pred["pid"] for pred in results.values()}) > 1
+    assert all(pred["all_started"] for pred in results.values())
 
 
 def test_solve_all_single_worker_runs_inline_in_order():
