@@ -20,6 +20,10 @@ READ_FILE_LINE_LIMIT = 1024
 SHELL_MAX_LINES = 2000
 SHELL_MAX_BYTES = 50 * 1024  # 50 KB
 FILE_HEADER_RE = re.compile(r"^### FILE: (.+)$", re.MULTILINE)
+# OpenAI's apply_patch format, which models sometimes send to cud_file.
+APPLY_PATCH_RE = re.compile(
+    r"^\*\*\* (Begin Patch|Update File:|Add File:|Delete File:)", re.MULTILINE
+)
 
 
 def _truncate_shell_output(output: str) -> tuple[str, str | None]:
@@ -61,6 +65,8 @@ def _truncate_shell_output(output: str) -> tuple[str, str | None]:
         f"Full output: {tmp.name}]"
     )
     return tail, tmp.name
+
+
 SEARCH_MARKER = "<<<<<<< SEARCH"
 DIVIDER_MARKER = "======="
 REPLACE_MARKER = ">>>>>>> REPLACE"
@@ -108,7 +114,21 @@ def read_file_tool() -> Tool:
             "required": ["filename", "start_line", "line_count"],
         },
     )
-    def read_file(filename: str, start_line: int, line_count: int) -> str:
+    def read_file(
+        filename: str,
+        start_line: int | None = None,
+        line_count: int | None = None,
+        offset: int | None = None,
+        limit: int | None = None,
+    ) -> str:
+        # offset/limit are accepted as aliases because models often reach for
+        # those names; they aren't advertised in the schema.
+        if start_line is None:
+            start_line = offset if offset is not None else 0
+        if line_count is None:
+            line_count = limit
+        if line_count is None:
+            return "error: line_count is required"
         if start_line < 0:
             return "error: start_line must be non-negative"
         if line_count < 0:
@@ -147,6 +167,21 @@ def read_file_tool() -> Tool:
 
 def _parse_cud_blocks(edits: str) -> list[_CUDOperation]:
     matches = list(FILE_HEADER_RE.finditer(edits))
+    if not matches and APPLY_PATCH_RE.search(edits):
+        return [
+            _CUDOperation(
+                path="(input)",
+                error=(
+                    "this looks like *** Begin Patch / *** Update File: format, "
+                    "which cud_file does not accept. Use one block per change:\n"
+                    "### FILE: path/to/file.py\n"
+                    f"{SEARCH_MARKER}\nold text\n{DIVIDER_MARKER}\nnew text\n"
+                    f"{REPLACE_MARKER}\n"
+                    "(empty SEARCH section to create a file; DELETE instead of "
+                    "the markers to delete one)"
+                ),
+            )
+        ]
     if not matches:
         return [_CUDOperation(path="(input)", error="no ### FILE blocks found")]
 

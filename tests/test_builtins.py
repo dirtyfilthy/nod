@@ -217,6 +217,74 @@ def test_cud_file_malformed_block_returns_error(tmp_path):
     assert out == f"error: {path}: missing ======= divider"
 
 
+def test_cud_file_rejects_apply_patch_format_with_expected_shape(tmp_path):
+    path = tmp_path / "a.py"
+    path.write_text("x = 1\n")
+    patch = (
+        "*** Begin Patch\n"
+        f"*** Update File: {path}\n"
+        "@@\n"
+        "-x = 1\n"
+        "+x = 2\n"
+        "*** End Patch"
+    )
+
+    out = _registry().dispatch(
+        ToolCall(id="1", name="cud_file", arguments={"edits": patch})
+    )
+
+    assert out.startswith("error: (input): this looks like *** Begin Patch")
+    assert "### FILE: " in out
+    assert "<<<<<<< SEARCH" in out and ">>>>>>> REPLACE" in out
+    assert path.read_text() == "x = 1\n"
+
+
+def test_read_file_accepts_offset_and_limit_aliases(tmp_path):
+    path = tmp_path / "f.txt"
+    path.write_text("a\nb\nc\nd\n")
+    registry = _registry()
+
+    aliased = registry.dispatch(
+        ToolCall(
+            id="1",
+            name="read_file",
+            arguments={"filename": str(path), "offset": 1, "limit": 2},
+        )
+    )
+    assert aliased == registry.dispatch(
+        ToolCall(
+            id="2",
+            name="read_file",
+            arguments={"filename": str(path), "start_line": 1, "line_count": 2},
+        )
+    )
+    assert aliased.endswith("\nb\nc")
+
+    # limit alone reads from the top.
+    from_top = registry.dispatch(
+        ToolCall(id="3", name="read_file", arguments={"filename": str(path), "limit": 1})
+    )
+    assert from_top.startswith("start_offset: 0\n")
+    assert from_top.endswith("\na")
+
+
+def test_read_file_without_a_line_count_returns_error(tmp_path):
+    path = tmp_path / "f.txt"
+    path.write_text("a\n")
+
+    out = _registry().dispatch(
+        ToolCall(id="1", name="read_file", arguments={"filename": str(path)})
+    )
+    assert out == "error: line_count is required"
+
+
+def test_read_file_schema_still_advertises_only_canonical_names():
+    schema = {s["function"]["name"]: s["function"] for s in _registry().schemas()}
+    params = schema["read_file"]["parameters"]
+    assert set(params["properties"]) == {"filename", "start_line", "line_count"}
+    assert params["required"] == ["filename", "start_line", "line_count"]
+
+
 def test_read_file_missing_path_returns_error(tmp_path):
     out = _registry().dispatch(
         ToolCall(
