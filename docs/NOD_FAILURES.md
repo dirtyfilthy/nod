@@ -232,6 +232,42 @@ Commit `4be226c`:
 `docs/swebench-generation-environment.md` records "no internet during
 generation" as part of the fairness rules.
 
+### The offline re-run, and a second leak
+
+Run `nod-smoke-20261025-012112` (nod `4be226c`) repeated the sample offline and
+scored 10/15. Every network attempt failed: `pip download` found no versions,
+and there were no `http_get` calls. But the model had moved on to looking for
+newer copies of the code inside the image, running `find /` for the module
+outside `/testbed` and listing package caches.
+
+In `pydata__xarray-4248` that worked. The image's conda download cache held
+xarray 2025.4.0, and the model grepped its `formatting.py` and found the very
+hook the fix adds:
+
+```text
+296:    if hasattr(var._data, "_repr_inline_"):
+297:        return var._data._repr_inline_(max_width)
+```
+
+It wrote its fix from that. The leak is in SWE-bench's image, not nod's setup;
+the other images' caches held nothing useful. Counting xarray as a failure,
+the clean result is **9/15**, against V3.2's 6/15 on the same sample: newly
+solved django-12113, sphinx-8506 and sympy-17630, none lost.
+
+`start_container` in `bench/swebench/run_nod.py` now deletes the package download caches (`/opt/miniconda3/pkgs`,
+`/opt/conda/pkgs`, `/root/.cache/pip`) when each generation container starts.
+On a real image, the environment and tests still work without them.
+
+Two caveats on comparing the models:
+
+- V4.1 Flash reasons before tool calls, and until this fix nod discarded that
+  reasoning instead of sending it back. DeepSeek's thinking-mode docs require it
+  be passed back within a tool loop (their own API returns 400 without it), so
+  these V4.1 runs had the model re-thinking from scratch each step. Commit
+  `2cc624a` stores reasoning, sends it back, and logs it in traces.
+- Whether V3.2 was reasoning during its runs wasn't checked, so the 6 to 9 gain
+  isn't purely "newer model".
+
 ### Lessons
 
 - Treat a sudden jump in score as a bug until the traces say otherwise. One

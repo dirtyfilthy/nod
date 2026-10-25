@@ -37,7 +37,8 @@ Useful flags: `--instance-ids astropy__astropy-12907 django__django-11099`,
 (solve up to 4 instances at once, each in its own process and container;
 default 1), `--provider deepinfra/fp8` (the default: the one OpenRouter provider
 every request goes to, fallbacks off, so runs stay comparable; `''` lets
-OpenRouter choose). See
+OpenRouter choose), `--reasoning-effort high` (the default; OpenRouter's
+`reasoning.effort`, `''` for the model's default). See
 `docs/swebench-generation-environment.md` for why letting nod run tests in the
 eval image is fair on SWE-bench. The images are x86; on an ARM machine Docker
 emulates them, which works but is slow. Output is a JSONL of

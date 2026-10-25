@@ -55,6 +55,10 @@ DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
 # the account's privacy setting excludes providers that may train on prompts,
 # which removes it; DeepInfra states its quantization (fp8).
 DEFAULT_PROVIDER = "deepinfra/fp8"
+# Set explicitly so results don't ride on a provider default that can change.
+# Whatever the model reasons is sent back each step, as DeepSeek's thinking mode
+# requires in tool loops.
+DEFAULT_REASONING_EFFORT = "high"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 CONTAINER_WORKDIR = "/testbed"
 CONDA_ACTIVATE = "source /opt/miniconda3/bin/activate && conda activate testbed"
@@ -169,6 +173,12 @@ def start_container(image: str, name: str, host_dir: str, log=print) -> bool:
         ["docker", "run", "-d", "--name", name, "--network", "none",
          "-v", f"{host_dir}:{CONTAINER_WORKDIR}", "-v", f"{host_dir}:{host_dir}",
          "-w", CONTAINER_WORKDIR, image, "tail", "-f", "/dev/null"],
+        # Package download caches can hold newer releases of the repo under test
+        # (the xarray-4248 image's conda cache had xarray 2025.4.0, with the
+        # fix). Installed envs keep their own copies of the files, so the caches
+        # aren't needed to run anything. Grading uses fresh containers.
+        ["docker", "exec", "-u", "0", name, "rm", "-rf",
+         "/opt/miniconda3/pkgs", "/opt/conda/pkgs", "/root/.cache/pip"],
     ]
     for cmd in steps:
         result = _run(cmd, timeout=1800)
@@ -257,11 +267,13 @@ def build_bench_agent(
     traces_dir: str | None,
     shell_argv=None,
     provider: str = DEFAULT_PROVIDER,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> Agent:
     """Build the default nod instance used for SWE-bench generation.
 
     `provider` pins an OpenRouter provider with fallbacks off; "" lets
-    OpenRouter choose.
+    OpenRouter choose. `reasoning_effort` is sent as OpenRouter's
+    `reasoning.effort`; "" leaves the model's default.
     """
     cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
     routing = {"order": [provider], "allow_fallbacks": False} if provider else {}
@@ -269,6 +281,7 @@ def build_bench_agent(
         model=cfg.model,
         base_url=cfg.base_url,
         provider_routing=routing,
+        reasoning={"effort": reasoning_effort} if reasoning_effort else {},
     )
     skills = SkillLoader(cfg.resolved_skills_dirs())
     return Agent(
@@ -291,6 +304,7 @@ def solve_instance(
     workdir: str,
     traces_dir: str | None,
     provider: str = DEFAULT_PROVIDER,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> dict:
     instance_id = inst["instance_id"]
     empty = {"instance_id": instance_id, "model_patch": "", "model_name_or_path": f"nod-{model}"}
@@ -325,6 +339,7 @@ def solve_instance(
         traces_dir=traces_dir,
         shell_argv=container_shell_argv(container),
         provider=provider,
+        reasoning_effort=reasoning_effort,
     )
 
     prompt = PROMPT_TEMPLATE.format(problem=inst["problem_statement"])
@@ -383,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--provider", default=DEFAULT_PROVIDER, help="OpenRouter provider to pin, fallbacks off ('' lets OpenRouter choose).")
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT, help="OpenRouter reasoning effort, e.g. low/medium/high ('' leaves the model's default).")
     parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where each instance's /testbed is copied (default: a temp dir).")
@@ -421,8 +437,13 @@ def main(argv: list[str] | None = None) -> int:
         workdir=workdir,
         traces_dir=args.traces_dir,
         provider=args.provider,
+        reasoning_effort=args.reasoning_effort,
     )
-    print(f"Solving with {args.workers} worker(s), model {args.model} via {args.provider or 'any provider'}.", flush=True)
+    print(
+        f"Solving with {args.workers} worker(s), model {args.model} via "
+        f"{args.provider or 'any provider'}, reasoning effort {args.reasoning_effort or 'default'}.",
+        flush=True,
+    )
     started = time.monotonic()
     with out_path.open("w", encoding="utf-8") as fh:
         try:

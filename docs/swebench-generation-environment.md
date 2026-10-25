@@ -75,6 +75,14 @@ already holds everything the tests need. A few test suites call live services
 (requests' tests hit httpbin), so those particular tests can't pass during
 generation; that's fine, since grading runs them with network.
 
+The image itself can hold future code too. The `pydata__xarray-4248` image's
+conda download cache (`/opt/miniconda3/pkgs`) had xarray 2025.4.0, which
+contains the fix, and the model found it with `find /`. So each generation
+container also deletes its package download caches at startup
+(`/opt/miniconda3/pkgs`, `/opt/conda/pkgs`, `/root/.cache/pip`). The installed
+environments keep their own copies of every file, so nothing that runs needs
+them, and grading builds fresh containers.
+
 ## The one real sin at submission time
 
 Ship **source edits only** in the diff. Strip test files, build directories,

@@ -93,3 +93,12 @@ def test_bench_agent_has_no_network_tool(monkeypatch):
     assert "http_get" not in agent.registry
     assert "run_shell" in agent.registry
     assert "no internet access" in agent.system_prompt()
+
+
+def test_bench_agent_sets_reasoning_effort(monkeypatch):
+    run_nod = _load_run_nod_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    common = dict(model="test-model", base_url="https://example.invalid/v1", max_turns=7, traces_dir=None)
+
+    assert run_nod.build_bench_agent(**common).provider.reasoning == {"effort": run_nod.DEFAULT_REASONING_EFFORT}
+    assert run_nod.build_bench_agent(**common, reasoning_effort="").provider.reasoning == {}
