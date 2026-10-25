@@ -102,6 +102,7 @@ def test_bench_agent_sets_reasoning_effort(monkeypatch):
 
     assert run_nod.build_bench_agent(**common).provider.reasoning == {"effort": run_nod.DEFAULT_REASONING_EFFORT}
     assert run_nod.build_bench_agent(**common, reasoning_effort="").provider.reasoning == {}
+    assert run_nod.build_bench_agent(**common, reasoning_effort="default").provider.reasoning == {}
 
 
 def test_workspace_names_do_not_reveal_the_instance(monkeypatch, tmp_path):

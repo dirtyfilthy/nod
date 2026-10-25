@@ -282,7 +282,8 @@ def build_bench_agent(
         model=cfg.model,
         base_url=cfg.base_url,
         provider_routing=routing,
-        reasoning={"effort": reasoning_effort} if reasoning_effort else {},
+        # "default" (or "") sends no reasoning field, leaving the model's own.
+        reasoning={"effort": reasoning_effort} if reasoning_effort not in ("", "default") else {},
     )
     skills = SkillLoader(cfg.resolved_skills_dirs())
     return Agent(
@@ -404,7 +405,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--provider", default=DEFAULT_PROVIDER, help="OpenRouter provider to pin, fallbacks off ('' lets OpenRouter choose).")
-    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT, help="OpenRouter reasoning effort, e.g. low/medium/high ('' leaves the model's default).")
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT, help="OpenRouter reasoning effort, e.g. low/medium/high; 'default' (or '') sends none, leaving the model's default.")
     parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where each instance's /testbed is copied (default: a temp dir).")
