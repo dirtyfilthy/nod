@@ -129,3 +129,32 @@ def test_workspace_names_do_not_reveal_the_instance(monkeypatch, tmp_path):
 
     for value in (seen["name"], os.path.relpath(seen["host_dir"], tmp_path)):
         assert "863" not in value and "requests" not in value
+
+
+def test_pull_image_waits_out_docker_hub_rate_limit(monkeypatch):
+    import subprocess
+
+    run_nod = _load_run_nod_module()
+    results = iter([
+        subprocess.CompletedProcess([], 1, "", "toomanyrequests: You have reached your unauthenticated pull rate limit."),
+        subprocess.CompletedProcess([], 1, "", "toomanyrequests: You have reached your unauthenticated pull rate limit."),
+        subprocess.CompletedProcess([], 0, "", ""),
+    ])
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: next(results))
+    slept = []
+
+    assert run_nod.pull_image("img", log=lambda m: None, sleep=slept.append)
+    assert slept == [run_nod.PULL_RATE_LIMIT_WAIT_SECONDS] * 2
+
+
+def test_pull_image_gives_up_on_other_errors_and_after_max_wait(monkeypatch):
+    import subprocess
+
+    run_nod = _load_run_nod_module()
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: subprocess.CompletedProcess([], 1, "", "manifest unknown"))
+    assert not run_nod.pull_image("img", log=lambda m: None, sleep=lambda s: None)
+
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: subprocess.CompletedProcess([], 1, "", "toomanyrequests"))
+    slept = []
+    assert not run_nod.pull_image("img", log=lambda m: None, sleep=slept.append)
+    assert sum(slept) == run_nod.PULL_RATE_LIMIT_MAX_WAIT_SECONDS
