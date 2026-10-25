@@ -102,3 +102,20 @@ def test_bench_agent_sets_reasoning_effort(monkeypatch):
 
     assert run_nod.build_bench_agent(**common).provider.reasoning == {"effort": run_nod.DEFAULT_REASONING_EFFORT}
     assert run_nod.build_bench_agent(**common, reasoning_effort="").provider.reasoning == {}
+
+
+def test_workspace_names_do_not_reveal_the_instance(monkeypatch, tmp_path):
+    run_nod = _load_run_nod_module()
+    seen = {}
+
+    def fake_start(image, name, host_dir, log=print):
+        seen.update(name=name, host_dir=host_dir)
+        return False  # stop before any docker work
+
+    monkeypatch.setattr(run_nod, "start_container", fake_start)
+    inst = {"instance_id": "psf__requests-863", "image": "img", "base_commit": "x", "problem_statement": "p"}
+
+    run_nod.solve_instance(inst, model="m", base_url="u", max_turns=1, workdir=str(tmp_path), traces_dir=None)
+
+    for value in (seen["name"], os.path.relpath(seen["host_dir"], tmp_path)):
+        assert "863" not in value and "requests" not in value

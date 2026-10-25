@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -313,8 +314,13 @@ def solve_instance(
         # Prefixed so lines from instances solved in parallel stay attributable.
         print(f"  [{instance_id}] {msg}", flush=True)
 
-    repo_dir = os.path.join(workdir, instance_id.replace("/", "__"))
-    container = f"nod-gen.{instance_id.lower()}"
+    # Neutral names: the repo dir is also mounted inside the container at its own
+    # path, and a model that searches the filesystem will find it, so neither it
+    # nor the container may carry the instance id (whose number is the upstream
+    # PR number). The host log lines keep the id.
+    workspace = uuid.uuid4().hex[:12]
+    repo_dir = os.path.join(workdir, workspace)
+    container = f"nod-gen-{workspace}"
     if os.path.exists(repo_dir):
         shutil.rmtree(repo_dir)
 
@@ -424,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
     if _run(["docker", "info"], timeout=60).returncode != 0:
         sys.exit("error: docker is not available; generation runs in each instance's eval image.")
 
-    workdir = args.workdir or tempfile.mkdtemp(prefix="nod-swebench-")
+    workdir = args.workdir or tempfile.mkdtemp(prefix="work-")
     os.makedirs(workdir, exist_ok=True)
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
