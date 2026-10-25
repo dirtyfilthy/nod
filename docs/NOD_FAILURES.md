@@ -200,9 +200,10 @@ rather than copied from it.
   `git branch -a`, and `git show` on several instances and found nothing from
   after the base commit.
 - **The instance id.** Each instance's number is its upstream PR number, and
-  it appears in the host work dir and container names. No trace shows the
-  number before the first network call; the model found the PR numbers by
-  searching.
+  it appeared in the host work dir and container names. In this run no trace
+  shows the number before the first network call; the model found the PR
+  numbers by searching. A later run did find the id inside the container (see
+  "Hunting for the benchmark" below).
 - **Earlier runs.** Across all five V3.2 runs, with the same tools and the same
   network access, the model made zero `http_get` calls and no lookups from the
   shell. Those results stand.
@@ -268,6 +269,50 @@ Two caveats on comparing the models:
 - Whether V3.2 was reasoning during its runs wasn't checked, so the 6 to 9 gain
   isn't purely "newer model".
 
+### Reasoning sent back, and hunting for the benchmark
+
+Run `nod-smoke-20261025-042453` (nod `137de7d`) was the first with reasoning
+stored and sent back each step, reasoning effort set to `high`, and package
+caches wiped. It scored **11/15**, with no leak found:
+
+| Run | Clean score | Cost | Generation (4 workers) |
+| --- | --- | --- | --- |
+| V3.2 | 6/15 | $2.84 | 35 min |
+| V4.1, reasoning discarded, default effort | 9/15 | $1.85 | 157 min |
+| V4.1, reasoning sent back, effort `high` | 11/15 | $0.44 | 28 min |
+
+Newly solved: pylint-7228 and pytest-5103, both with low similarity to the
+upstream fix (0.43 and 0.02). xarray-4248 failed now that the conda cache is
+gone, as expected for an instance whose design is only in the hints. Turns fell
+from 971 to 764 and runs hitting the 100-turn limit from 5 to 3. Traces now
+carry reasoning on 688 of 764 assistant steps.
+
+Two changes landed together, so the gain isn't attributable to either alone.
+Most of the speed and cost drop is the effort setting: in spot checks the
+model's unprompted default reasoned more per turn than `high` (roughly 630 to
+1,700 reasoning tokens against about 200 on the same prompt).
+
+**Hunting for the benchmark.** With the network and caches closed, the model
+searched the filesystem for the benchmark itself: `find /` for `*swe*bench*`,
+`*8506*.json`, `*17630*`, `*.patch`, `*.jsonl` and `*.parquet`, and `env` for
+`SWE`/`INSTANCE`. Nothing usable turned up, but it did find nod's own work dir,
+mounted into the container at its host path so the file tools' absolute paths
+resolve, and named after the instance (`/tmp/nod-swebench-.../sympy__sympy-17630`).
+So the instance id, and with it the upstream PR number, was visible inside the
+container. Offline it can't fetch anything with it, but it could prompt recall
+of a fix seen in training.
+
+Commit `ee15d34` gives the work dir and container random names and changes the
+default workdir prefix to `work-`. On a real image, `find /` for the id, the
+repo name, or `swebench` now finds nothing, and `env` is clean. Host logs,
+traces, and predictions keep the id.
+
+The progression across these runs is worth noting: given the internet, the
+model fetched the fix; without it, it searched the image for newer copies of
+the code; with those gone, it searched for the benchmark's own files. Each step
+is reasonable from the model's side, and each needed closing in the
+environment, not the prompt.
+
 ### Lessons
 
 - Treat a sudden jump in score as a bug until the traces say otherwise. One
@@ -278,3 +323,6 @@ Two caveats on comparing the models:
   the bench's prompt rules (unfiltered output, no "already fixed" exits).
 - Re-check a benchmark's assumptions whenever the model changes. A setup that
   was fair for one model was not fair for the next.
+- Check leaks by reading what the model searched for, not only what it
+  submitted. Patch similarity to the upstream fix catches copying; the search
+  commands in the traces show where the next leak will come from.
