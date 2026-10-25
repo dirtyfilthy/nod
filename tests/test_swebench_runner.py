@@ -68,3 +68,15 @@ def test_solve_all_single_worker_runs_inline_in_order():
     out = list(run_nod.solve_all(rows, lambda inst: {"instance_id": inst["instance_id"]}, workers=1))
 
     assert [inst["instance_id"] for inst, _ in out] == ["inst0", "inst1", "inst2"]
+
+
+def test_bench_agent_pins_one_provider_without_fallbacks(monkeypatch):
+    run_nod = _load_run_nod_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    common = dict(model="test-model", base_url="https://example.invalid/v1", max_turns=7, traces_dir=None)
+
+    pinned = run_nod.build_bench_agent(**common)
+    assert pinned.provider.provider_routing == {"order": [run_nod.DEFAULT_PROVIDER], "allow_fallbacks": False}
+
+    unpinned = run_nod.build_bench_agent(**common, provider="")
+    assert unpinned.provider.provider_routing == {}

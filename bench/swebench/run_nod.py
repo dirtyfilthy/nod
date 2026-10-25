@@ -50,6 +50,11 @@ from nod.tools import ToolRegistry
 # grade it.
 DEFAULT_DATASET = "SWE-bench/SWE-bench_Lite"
 DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash-1017"
+# One OpenRouter provider with no fallbacks, so every run gets the same weights
+# and runs stay comparable. DeepSeek's own endpoint is the config default, but
+# the account's privacy setting excludes providers that may train on prompts,
+# which removes it; DeepInfra states its quantization (fp8).
+DEFAULT_PROVIDER = "deepinfra/fp8"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 CONTAINER_WORKDIR = "/testbed"
 CONDA_ACTIVATE = "source /opt/miniconda3/bin/activate && conda activate testbed"
@@ -246,17 +251,23 @@ def build_bench_agent(
     max_turns: int,
     traces_dir: str | None,
     shell_argv=None,
+    provider: str = DEFAULT_PROVIDER,
 ) -> Agent:
-    """Build the default nod instance used for SWE-bench generation."""
+    """Build the default nod instance used for SWE-bench generation.
+
+    `provider` pins an OpenRouter provider with fallbacks off; "" lets
+    OpenRouter choose.
+    """
     cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
-    provider = OpenAICompatibleProvider(
+    routing = {"order": [provider], "allow_fallbacks": False} if provider else {}
+    llm = OpenAICompatibleProvider(
         model=cfg.model,
         base_url=cfg.base_url,
-        provider_routing=cfg.provider_routing,
+        provider_routing=routing,
     )
     skills = SkillLoader(cfg.resolved_skills_dirs())
     return Agent(
-        provider=provider,
+        provider=llm,
         registry=ToolRegistry(builtin_tools(shell_argv=shell_argv)),
         memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
         skills=skills,
@@ -273,6 +284,7 @@ def solve_instance(
     max_turns: int,
     workdir: str,
     traces_dir: str | None,
+    provider: str = DEFAULT_PROVIDER,
 ) -> dict:
     instance_id = inst["instance_id"]
     empty = {"instance_id": instance_id, "model_patch": "", "model_name_or_path": f"nod-{model}"}
@@ -306,6 +318,7 @@ def solve_instance(
         max_turns=max_turns,
         traces_dir=traces_dir,
         shell_argv=container_shell_argv(container),
+        provider=provider,
     )
 
     prompt = PROMPT_TEMPLATE.format(problem=inst["problem_statement"])
@@ -363,6 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--instance-ids", nargs="*", help="Specific instance ids to run.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--provider", default=DEFAULT_PROVIDER, help="OpenRouter provider to pin, fallbacks off ('' lets OpenRouter choose).")
     parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument("--output", default="bench/swebench/predictions.jsonl")
     parser.add_argument("--workdir", default=None, help="Where each instance's /testbed is copied (default: a temp dir).")
@@ -400,8 +414,9 @@ def main(argv: list[str] | None = None) -> int:
         max_turns=args.max_turns,
         workdir=workdir,
         traces_dir=args.traces_dir,
+        provider=args.provider,
     )
-    print(f"Solving with {args.workers} worker(s).", flush=True)
+    print(f"Solving with {args.workers} worker(s), model {args.model} via {args.provider or 'any provider'}.", flush=True)
     started = time.monotonic()
     with out_path.open("w", encoding="utf-8") as fh:
         try:
