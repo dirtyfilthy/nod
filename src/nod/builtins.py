@@ -360,7 +360,10 @@ def list_dir_tool() -> Tool:
     return list_dir
 
 
-def run_shell_tool(argv: Callable[[str], list[str]] | None = None) -> Tool:
+def run_shell_tool(
+    argv: Callable[[str], list[str]] | None = None,
+    timeout: int = SHELL_TIMEOUT_SECONDS,
+) -> Tool:
     """Run commands through the local shell, or through ``argv(command)`` if given.
 
     ``argv`` lets a caller route commands somewhere else (e.g. ``docker exec``)
@@ -389,10 +392,20 @@ def run_shell_tool(argv: Callable[[str], list[str]] | None = None) -> Tool:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                timeout=SHELL_TIMEOUT_SECONDS,
+                timeout=timeout,
             )
-        except subprocess.TimeoutExpired:
-            return f"error: command timed out after {SHELL_TIMEOUT_SECONDS} seconds"
+        except subprocess.TimeoutExpired as exc:
+            # The output captured before the kill is often what the model needs
+            # (e.g. which test was running). It comes back as bytes even in text
+            # mode.
+            partial = exc.output or ""
+            if isinstance(partial, bytes):
+                partial = partial.decode("utf-8", errors="replace")
+            truncated, _ = _truncate_shell_output(partial or "(no output)")
+            return (
+                f"error: command timed out after {timeout} seconds and was killed. "
+                f"Output before the timeout:\n{truncated}"
+            )
 
         output = completed.stdout
         if not output:
@@ -433,11 +446,14 @@ def http_get_tool() -> Tool:
     return http_get
 
 
-def builtin_tools(shell_argv: Callable[[str], list[str]] | None = None) -> list[Tool]:
+def builtin_tools(
+    shell_argv: Callable[[str], list[str]] | None = None,
+    shell_timeout: int = SHELL_TIMEOUT_SECONDS,
+) -> list[Tool]:
     return [
         read_file_tool(),
         cud_file_tool(),
         list_dir_tool(),
-        run_shell_tool(shell_argv),
+        run_shell_tool(shell_argv, timeout=shell_timeout),
         http_get_tool(),
     ]

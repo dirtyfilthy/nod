@@ -469,6 +469,35 @@ def test_run_shell_routes_through_argv_wrapper():
     assert out.index("wrapped") < out.index("inner")
 
 
+def test_run_shell_timeout_returns_output_so_far():
+    registry = ToolRegistry(builtin_tools(shell_timeout=1))
+    out = registry.dispatch(
+        ToolCall(
+            id="1",
+            name="run_shell",
+            arguments={"command": "echo started; sleep 10; echo never"},
+        )
+    )
+    assert out.startswith("error: command timed out after 1 seconds")
+    assert "started" in out
+    assert "never" not in out
+
+
+def test_run_shell_timeout_handles_str_and_missing_output(monkeypatch):
+    import subprocess
+
+    from nod.builtins import run_shell_tool
+
+    for partial, expected in (("text so far", "text so far"), (None, "(no output)")):
+        def fake_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired("cmd", 5, output=partial)
+
+        monkeypatch.setattr("nod.builtins.subprocess.run", fake_run)
+        out = run_shell_tool(timeout=5).func(command="x")
+        assert out.startswith("error: command timed out after 5 seconds")
+        assert out.endswith(f"\n{expected}")
+
+
 def test_run_shell_truncates_large_output_to_tmpfile():
     from nod.builtins import SHELL_MAX_LINES, _truncate_shell_output
 

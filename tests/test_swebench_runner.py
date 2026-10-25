@@ -161,3 +161,25 @@ def test_pull_image_gives_up_on_other_errors_and_after_max_wait(monkeypatch):
     slept = []
     assert not run_nod.pull_image("img", log=lambda m: None, sleep=slept.append)
     assert sum(slept) == run_nod.PULL_RATE_LIMIT_MAX_WAIT_SECONDS
+
+
+def test_container_shell_argv_uses_bench_timeout():
+    run_nod = _load_run_nod_module()
+
+    argv = run_nod.container_shell_argv("c")("echo hi")
+
+    i = argv.index("timeout")
+    assert argv[i:i + 4] == ["timeout", "-k", "5", str(run_nod.SHELL_TIMEOUT_SECONDS)]
+    assert run_nod.SHELL_TIMEOUT_SECONDS == 180
+    assert argv[-1] == "echo hi"
+
+
+def test_bench_agent_tells_the_model_the_bench_timeout(monkeypatch):
+    run_nod = _load_run_nod_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    agent = run_nod.build_bench_agent(
+        model="test-model", base_url="https://example.invalid/v1", max_turns=7, traces_dir=None
+    )
+
+    assert "time out after 180 seconds" in agent.system_prompt()

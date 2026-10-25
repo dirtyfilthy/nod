@@ -39,7 +39,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from nod.agent import Agent
-from nod.builtins import SHELL_TIMEOUT_SECONDS, builtin_tools
+from nod.builtins import builtin_tools
 from nod.config import Config
 from nod.memory import InMemoryMemory, JSONFileMemory
 from nod.provider import OpenAICompatibleProvider, ProviderError
@@ -63,6 +63,9 @@ DEFAULT_REASONING_EFFORT = "high"
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 CONTAINER_WORKDIR = "/testbed"
 CONDA_ACTIVATE = "source /opt/miniconda3/bin/activate && conda activate testbed"
+# Longer than the CLI's 60s: some test files the fix has to pass take minutes in
+# these images (sympy's test_arit.py timed out at 60s in sympy-20322).
+SHELL_TIMEOUT_SECONDS = 180
 
 # A SWE-focused persona. nod's default SOUL is a chat agent; for the benchmark we
 # want a terse engineer that edits files and stops when the fix is in.
@@ -315,7 +318,10 @@ def build_bench_agent(
     return Agent(
         provider=llm,
         # http_get is left out for the same reason the container has no network.
-        registry=ToolRegistry([t for t in builtin_tools(shell_argv=shell_argv) if t.name != "http_get"]),
+        registry=ToolRegistry([
+            t for t in builtin_tools(shell_argv=shell_argv, shell_timeout=SHELL_TIMEOUT_SECONDS)
+            if t.name != "http_get"
+        ]),
         memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
         skills=skills,
         soul=SWE_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS),
