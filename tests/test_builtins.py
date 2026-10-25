@@ -498,6 +498,26 @@ def test_run_shell_timeout_handles_str_and_missing_output(monkeypatch):
         assert out.endswith(f"\n{expected}")
 
 
+def test_run_shell_saves_truncated_output_in_output_dir(tmp_path):
+    from pathlib import Path
+
+    from nod.builtins import SHELL_MAX_LINES
+
+    registry = ToolRegistry(builtin_tools(shell_output_dir=str(tmp_path)))
+    out = registry.dispatch(
+        ToolCall(
+            id="1",
+            name="run_shell",
+            arguments={"command": f"seq 1 {SHELL_MAX_LINES + 10}"},
+        )
+    )
+
+    saved = list(tmp_path.iterdir())
+    assert len(saved) == 1
+    assert f"Full output: {saved[0]}]" in out
+    assert Path(saved[0]).read_text().splitlines()[0] == "1"
+
+
 def test_run_shell_truncates_large_output_to_tmpfile():
     from nod.builtins import SHELL_MAX_LINES, _truncate_shell_output
 

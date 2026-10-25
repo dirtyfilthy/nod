@@ -118,17 +118,99 @@ def test_workspace_names_do_not_reveal_the_instance(monkeypatch, tmp_path):
     run_nod = _load_run_nod_module()
     seen = {}
 
-    def fake_start(image, name, host_dir, log=print):
-        seen.update(name=name, host_dir=host_dir)
+    def fake_start(image, name, host_dir, scratch_dir, log=print):
+        seen.update(name=name, host_dir=host_dir, scratch_dir=scratch_dir)
         return False  # stop before any docker work
 
     monkeypatch.setattr(run_nod, "start_container", fake_start)
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: None)
     inst = {"instance_id": "psf__requests-863", "image": "img", "base_commit": "x", "problem_statement": "p"}
 
     run_nod.solve_instance(inst, model="m", base_url="u", max_turns=1, workdir=str(tmp_path), traces_dir=None)
 
-    for value in (seen["name"], os.path.relpath(seen["host_dir"], tmp_path)):
+    for value in (seen["name"], os.path.relpath(seen["host_dir"], tmp_path), os.path.relpath(seen["scratch_dir"], tmp_path)):
         assert "863" not in value and "requests" not in value
+
+
+def test_scratch_dir_is_outside_the_repo_and_cleaned_up(monkeypatch, tmp_path):
+    run_nod = _load_run_nod_module()
+    seen = {}
+
+    def fake_start(image, name, host_dir, scratch_dir, log=print):
+        # It must exist before docker run, or docker creates it as root.
+        seen.update(host_dir=host_dir, scratch_dir=scratch_dir, existed=os.path.isdir(scratch_dir))
+        return False
+
+    monkeypatch.setattr(run_nod, "start_container", fake_start)
+    removed = []
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: removed.append(cmd))
+    inst = {"instance_id": "i", "image": "img", "base_commit": "x", "problem_statement": "p"}
+
+    run_nod.solve_instance(inst, model="m", base_url="u", max_turns=1, workdir=str(tmp_path), traces_dir=None)
+
+    assert seen["existed"]
+    assert not seen["scratch_dir"].startswith(seen["host_dir"] + os.sep)
+    assert not os.path.exists(seen["scratch_dir"])
+    assert list(tmp_path.iterdir()) == []
+    assert removed and removed[0][:3] == ["docker", "rm", "-f"]
+
+
+def test_start_container_mounts_scratch_dir_at_its_own_path(monkeypatch):
+    import subprocess
+
+    run_nod = _load_run_nod_module()
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(run_nod, "_run", fake_run)
+
+    assert run_nod.start_container("img", "c", "/w/repo", "/w/repo-tmp", log=lambda m: None)
+
+    docker_run = next(c for c in cmds if c[:2] == ["docker", "run"])
+    assert "/w/repo-tmp:/w/repo-tmp" in docker_run
+
+
+def test_container_shell_argv_sets_tmpdir_and_bench_timeout():
+    run_nod = _load_run_nod_module()
+
+    argv = run_nod.container_shell_argv("c", "/w/repo-tmp")("echo hi")
+
+    assert "TMPDIR=/w/repo-tmp" in argv
+    i = argv.index("timeout")
+    assert argv[i:i + 4] == ["timeout", "-k", "5", str(run_nod.SHELL_TIMEOUT_SECONDS)]
+    assert run_nod.SHELL_TIMEOUT_SECONDS == 180
+    assert argv[-1] == "echo hi"
+
+
+def test_bench_agent_uses_bench_timeout_and_scratch_dir(monkeypatch, tmp_path):
+    run_nod = _load_run_nod_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    calls = []
+
+    def argv(command):
+        calls.append(command)
+        return ["sh", "-c", command]
+
+    agent = run_nod.build_bench_agent(
+        model="test-model", base_url="https://example.invalid/v1", max_turns=7,
+        traces_dir=None, shell_argv=argv, scratch_dir=str(tmp_path),
+    )
+
+    prompt = agent.system_prompt()
+    assert f"$TMPDIR, which is {tmp_path}" in prompt
+    assert "time out after 180 seconds" in prompt
+
+    from nod.builtins import SHELL_MAX_LINES
+    from nod.messages import ToolCall
+
+    out = agent.registry.dispatch(
+        ToolCall(id="1", name="run_shell", arguments={"command": f"seq 1 {SHELL_MAX_LINES + 10}"})
+    )
+    assert calls
+    assert f"Full output: {tmp_path}" in out
 
 
 def test_pull_image_waits_out_docker_hub_rate_limit(monkeypatch):
@@ -161,25 +243,3 @@ def test_pull_image_gives_up_on_other_errors_and_after_max_wait(monkeypatch):
     slept = []
     assert not run_nod.pull_image("img", log=lambda m: None, sleep=slept.append)
     assert sum(slept) == run_nod.PULL_RATE_LIMIT_MAX_WAIT_SECONDS
-
-
-def test_container_shell_argv_uses_bench_timeout():
-    run_nod = _load_run_nod_module()
-
-    argv = run_nod.container_shell_argv("c")("echo hi")
-
-    i = argv.index("timeout")
-    assert argv[i:i + 4] == ["timeout", "-k", "5", str(run_nod.SHELL_TIMEOUT_SECONDS)]
-    assert run_nod.SHELL_TIMEOUT_SECONDS == 180
-    assert argv[-1] == "echo hi"
-
-
-def test_bench_agent_tells_the_model_the_bench_timeout(monkeypatch):
-    run_nod = _load_run_nod_module()
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-    agent = run_nod.build_bench_agent(
-        model="test-model", base_url="https://example.invalid/v1", max_turns=7, traces_dir=None
-    )
-
-    assert "time out after 180 seconds" in agent.system_prompt()

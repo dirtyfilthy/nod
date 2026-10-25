@@ -106,9 +106,10 @@ Rules:
   you can read.
 - Do NOT run `git commit`, `git add`, or `git push`. Just leave your edits in the
   working tree; the harness captures the diff.
-- If you create any temporary or scratch files while investigating (helper
-  scripts, notes, repros), DELETE them before finishing so they don't leak into
-  the patch. Only the actual fix should remain in the working tree.
+- Put temporary or scratch files (helper scripts, notes, repros) in $TMPDIR
+  (see Environment), not in the repository. If you do create any inside the
+  repository, DELETE them before finishing so they don't leak into the patch.
+  Only the actual fix should remain in the working tree.
 - When the fix is complete, reply with a one-line summary and stop calling tools.
 
 Environment:
@@ -121,6 +122,12 @@ Environment:
   working directory, so `python` runs the right interpreter.
 - read_file, cud_file and list_dir see the same files. Give them paths relative
   to the repository root (e.g. `pkg/module.py`), not `/testbed/...`.
+- For scratch files use $TMPDIR, which is {scratch_dir}. Both the file tools
+  and the shell see it, so you can write a script there with cud_file and run
+  it with run_shell, or save output there from the shell and read it with
+  read_file. It is outside the repository, so files there never reach the
+  patch and don't need deleting. /tmp in the shell is the container's own and
+  the file tools can't see it.
 - Verify your fix by running the relevant existing tests with the project's
   own runner. pytest is NOT installed in every image, so use:
   - Django: `./tests/runtests.py <test_module>` (e.g. `./tests/runtests.py utils_tests.test_text`)
@@ -179,14 +186,16 @@ def pull_image(image: str, log=print, sleep=time.sleep) -> bool:
         waited += PULL_RATE_LIMIT_WAIT_SECONDS
 
 
-def start_container(image: str, name: str, host_dir: str, log=print) -> bool:
+def start_container(image: str, name: str, host_dir: str, scratch_dir: str, log=print) -> bool:
     """Start `name` from `image` with its /testbed mirrored at host_dir.
 
     /testbed is copied out rather than replaced with a fresh clone because the
     image's copy carries the build artifacts of the installed package (compiled
     extensions, egg-info). The copy is mounted both at /testbed, where the
     testbed env expects the package, and at its own host path, so absolute host
-    paths from the file tools also resolve inside the container.
+    paths from the file tools also resolve inside the container. scratch_dir (an
+    existing host dir) is mounted at its own path too, so scratch files outside
+    the repo are shared the same way.
     """
     _run(["docker", "rm", "-f", name])
     if _run(["docker", "image", "inspect", image]).returncode != 0:
@@ -202,6 +211,7 @@ def start_container(image: str, name: str, host_dir: str, log=print) -> bool:
         # The image already has everything the tests need.
         ["docker", "run", "-d", "--name", name, "--network", "none",
          "-v", f"{host_dir}:{CONTAINER_WORKDIR}", "-v", f"{host_dir}:{host_dir}",
+         "-v", f"{scratch_dir}:{scratch_dir}",
          "-w", CONTAINER_WORKDIR, image, "tail", "-f", "/dev/null"],
         # Package download caches can hold newer releases of the repo under test
         # (the xarray-4248 image's conda cache had xarray 2025.4.0, with the
@@ -219,19 +229,21 @@ def start_container(image: str, name: str, host_dir: str, log=print) -> bool:
     return True
 
 
-def container_shell_argv(name: str):
+def container_shell_argv(name: str, scratch_dir: str):
     """Build the run_shell wrapper that executes commands inside `name`.
 
     Commands run as the host user so files they create in the bind mount stay
-    editable by the file tools and by `git add` in make_patch. The inner
-    `timeout` makes sure a command the client gave up on doesn't keep running in
-    the container.
+    editable by the file tools and by `git add` in make_patch. TMPDIR points at
+    the shared scratch dir, so temp files the model makes from the shell are
+    visible to the file tools. The inner `timeout` makes sure a command the
+    client gave up on doesn't keep running in the container.
     """
     user = f"{os.getuid()}:{os.getgid()}"
 
     def argv(command: str) -> list[str]:
         return [
-            "docker", "exec", "-u", user, "-e", "HOME=/tmp", "-w", CONTAINER_WORKDIR, name,
+            "docker", "exec", "-u", user, "-e", "HOME=/tmp", "-e", f"TMPDIR={scratch_dir}",
+            "-w", CONTAINER_WORKDIR, name,
             "timeout", "-k", "5", str(SHELL_TIMEOUT_SECONDS),
             # `source activate` reads positional args as an env name, so stash the
             # command and clear them before activating.
@@ -296,15 +308,19 @@ def build_bench_agent(
     max_turns: int,
     traces_dir: str | None,
     shell_argv=None,
+    scratch_dir: str | None = None,
     provider: str = DEFAULT_PROVIDER,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> Agent:
     """Build the default nod instance used for SWE-bench generation.
 
-    `provider` pins an OpenRouter provider with fallbacks off; "" lets
-    OpenRouter choose. `reasoning_effort` is sent as OpenRouter's
-    `reasoning.effort`; "" leaves the model's default.
+    `scratch_dir` is the dir both the file tools and the shell see, where
+    run_shell saves long output; None uses the host temp dir, which is what a
+    local shell (no `shell_argv`) sees. `provider` pins an OpenRouter provider
+    with fallbacks off; "" lets OpenRouter choose. `reasoning_effort` is sent as
+    OpenRouter's `reasoning.effort`; "" leaves the model's default.
     """
+    scratch_dir = scratch_dir or tempfile.gettempdir()
     cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
     routing = {"order": [provider], "allow_fallbacks": False} if provider else {}
     llm = OpenAICompatibleProvider(
@@ -319,12 +335,14 @@ def build_bench_agent(
         provider=llm,
         # http_get is left out for the same reason the container has no network.
         registry=ToolRegistry([
-            t for t in builtin_tools(shell_argv=shell_argv, shell_timeout=SHELL_TIMEOUT_SECONDS)
+            t for t in builtin_tools(
+                shell_argv=shell_argv, shell_timeout=SHELL_TIMEOUT_SECONDS, shell_output_dir=scratch_dir,
+            )
             if t.name != "http_get"
         ]),
         memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
         skills=skills,
-        soul=SWE_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS),
+        soul=SWE_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS, scratch_dir=scratch_dir),
         max_turns=cfg.max_turns,
     )
 
@@ -350,16 +368,25 @@ def solve_instance(
     # Neutral names: the repo dir is also mounted inside the container at its own
     # path, and a model that searches the filesystem will find it, so neither it
     # nor the container may carry the instance id (whose number is the upstream
-    # PR number). The host log lines keep the id.
+    # PR number). The host log lines keep the id. The scratch dir is outside the
+    # repo so scratch files never reach the patch.
     workspace = uuid.uuid4().hex[:12]
     repo_dir = os.path.join(workdir, workspace)
+    scratch_dir = os.path.join(workdir, f"{workspace}-tmp")
     container = f"nod-gen-{workspace}"
-    if os.path.exists(repo_dir):
-        shutil.rmtree(repo_dir)
+    for d in (repo_dir, scratch_dir):
+        if os.path.exists(d):
+            shutil.rmtree(d)
+    os.makedirs(scratch_dir)
+
+    def cleanup() -> None:
+        _run(["docker", "rm", "-f", container])
+        shutil.rmtree(repo_dir, ignore_errors=True)
+        shutil.rmtree(scratch_dir, ignore_errors=True)
 
     log(f"starting {inst['image']} ...")
-    if not start_container(inst["image"], container, repo_dir, log=log):
-        shutil.rmtree(repo_dir, ignore_errors=True)
+    if not start_container(inst["image"], container, repo_dir, scratch_dir, log=log):
+        cleanup()
         return empty
     # The images add a "SWE-bench" commit on top of the base commit that only
     # flips file modes, so compare blob ids rather than commit ids. (core.fileMode
@@ -376,7 +403,8 @@ def solve_instance(
         base_url=base_url,
         max_turns=max_turns,
         traces_dir=traces_dir,
-        shell_argv=container_shell_argv(container),
+        shell_argv=container_shell_argv(container, scratch_dir),
+        scratch_dir=scratch_dir,
         provider=provider,
         reasoning_effort=reasoning_effort,
     )
@@ -392,8 +420,7 @@ def solve_instance(
         os.chdir(prev)
 
     patch = make_patch(repo_dir, base_tree)
-    _run(["docker", "rm", "-f", container])
-    shutil.rmtree(repo_dir, ignore_errors=True)
+    cleanup()
     log(f"patch: {len(patch)} chars")
     return {
         "instance_id": instance_id,

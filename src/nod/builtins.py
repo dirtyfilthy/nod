@@ -26,12 +26,15 @@ APPLY_PATCH_RE = re.compile(
 )
 
 
-def _truncate_shell_output(output: str) -> tuple[str, str | None]:
+def _truncate_shell_output(
+    output: str, output_dir: str | None = None
+) -> tuple[str, str | None]:
     """Return (text_for_model, tmp_path_or_none).
 
     Keeps the last SHELL_MAX_LINES lines or SHELL_MAX_BYTES bytes, whichever
     limit is hit first.  If the output is truncated the full text is written to
-    a temp file and the path is appended so the model can read it.
+    a temp file (in ``output_dir`` if given) and the path is appended so the
+    model can read it.
     """
     lines = output.splitlines()
     total_lines = len(lines)
@@ -53,7 +56,12 @@ def _truncate_shell_output(output: str) -> tuple[str, str | None]:
 
     # Write full output to a temp file the model can read_file later.
     tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".log", prefix="nod-shell-", delete=False, encoding="utf-8"
+        mode="w",
+        suffix=".log",
+        prefix="nod-shell-",
+        dir=output_dir,
+        delete=False,
+        encoding="utf-8",
     )
     tmp.write(output)
     tmp.close()
@@ -363,11 +371,15 @@ def list_dir_tool() -> Tool:
 def run_shell_tool(
     argv: Callable[[str], list[str]] | None = None,
     timeout: int = SHELL_TIMEOUT_SECONDS,
+    output_dir: str | None = None,
 ) -> Tool:
     """Run commands through the local shell, or through ``argv(command)`` if given.
 
     ``argv`` lets a caller route commands somewhere else (e.g. ``docker exec``)
     while keeping the same timeout, output merging, and truncation.
+    ``output_dir`` is where the full text of truncated output is saved (default:
+    the system temp dir); a caller that routes commands elsewhere can point it
+    at a directory the commands can also see.
     """
 
     @tool(
@@ -401,7 +413,7 @@ def run_shell_tool(
             partial = exc.output or ""
             if isinstance(partial, bytes):
                 partial = partial.decode("utf-8", errors="replace")
-            truncated, _ = _truncate_shell_output(partial or "(no output)")
+            truncated, _ = _truncate_shell_output(partial or "(no output)", output_dir)
             return (
                 f"error: command timed out after {timeout} seconds and was killed. "
                 f"Output before the timeout:\n{truncated}"
@@ -410,7 +422,7 @@ def run_shell_tool(
         output = completed.stdout
         if not output:
             output = "(no output)"
-        truncated, _ = _truncate_shell_output(output)
+        truncated, _ = _truncate_shell_output(output, output_dir)
         return f"exit code: {completed.returncode}\n{truncated}"
 
     return run_shell
@@ -449,11 +461,12 @@ def http_get_tool() -> Tool:
 def builtin_tools(
     shell_argv: Callable[[str], list[str]] | None = None,
     shell_timeout: int = SHELL_TIMEOUT_SECONDS,
+    shell_output_dir: str | None = None,
 ) -> list[Tool]:
     return [
         read_file_tool(),
         cud_file_tool(),
         list_dir_tool(),
-        run_shell_tool(shell_argv, timeout=shell_timeout),
+        run_shell_tool(shell_argv, timeout=shell_timeout, output_dir=shell_output_dir),
         http_get_tool(),
     ]
