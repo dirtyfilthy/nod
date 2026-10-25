@@ -104,6 +104,8 @@ Rules:
 - When the fix is complete, reply with a one-line summary and stop calling tools.
 
 Environment:
+- You have no internet access, so don't try to fetch code, issues, or packages.
+  Work from the repository in front of you.
 - The repository is at /testbed inside this instance's SWE-bench Docker image.
   The right Python, the project's dependencies, and the package itself are
   already installed in the `testbed` conda env.
@@ -161,7 +163,10 @@ def start_container(image: str, name: str, host_dir: str, log=print) -> bool:
         ["docker", "create", "--name", name, image],
         ["docker", "cp", f"{name}:{CONTAINER_WORKDIR}", host_dir],
         ["docker", "rm", name],
-        ["docker", "run", "-d", "--name", name,
+        # No network: the upstream fix is a search away (PR diffs, later
+        # releases on PyPI), and fetching it would turn the run into a lookup.
+        # The image already has everything the tests need.
+        ["docker", "run", "-d", "--name", name, "--network", "none",
          "-v", f"{host_dir}:{CONTAINER_WORKDIR}", "-v", f"{host_dir}:{host_dir}",
          "-w", CONTAINER_WORKDIR, image, "tail", "-f", "/dev/null"],
     ]
@@ -268,7 +273,8 @@ def build_bench_agent(
     skills = SkillLoader(cfg.resolved_skills_dirs())
     return Agent(
         provider=llm,
-        registry=ToolRegistry(builtin_tools(shell_argv=shell_argv)),
+        # http_get is left out for the same reason the container has no network.
+        registry=ToolRegistry([t for t in builtin_tools(shell_argv=shell_argv) if t.name != "http_get"]),
         memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
         skills=skills,
         soul=SWE_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS),

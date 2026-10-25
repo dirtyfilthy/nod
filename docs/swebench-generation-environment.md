@@ -60,6 +60,21 @@ by the harness; the agent only sees the issue text and the code at the base
 commit. Letting it run tests just lets it do the same verify-before-submit
 loop a human developer would.
 
+## No internet during generation
+
+The harness scrubs future commits from git, but the internet still has them.
+On its first run DeepSeek V4.1 Flash searched GitHub and fetched the actual fix
+for 13 of 15 instances (`pull/<n>.diff`, the fixing commit's `.patch`, later
+releases via `pip download`) and scored 15/15. That's the gold patch by another
+route, so it is cheating by the rule above.
+
+So generation runs offline: the instance container starts with
+`--network none` (no `curl`, `pip`, or `urllib`), nod's `http_get` tool is left
+out of the bench agent, and the soul says there's no internet. The image
+already holds everything the tests need. A few test suites call live services
+(requests' tests hit httpbin), so those particular tests can't pass during
+generation; that's fine, since grading runs them with network.
+
 ## The one real sin at submission time
 
 Ship **source edits only** in the diff. Strip test files, build directories,
