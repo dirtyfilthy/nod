@@ -344,3 +344,111 @@ environment, not the prompt.
 - Check leaks by reading what the model searched for, not only what it
   submitted. Patch similarity to the upstream fix catches copying; the search
   commands in the traces show where the next leak will come from.
+
+## SWE-bench Lite: full runs, failure analysis, and run-to-run noise
+
+Model `deepseek/deepseek-v4.1-flash-1017` pinned to `deepinfra/fp8`, reasoning
+effort `high`, reasoning sent back each step, offline containers with caches
+wiped and neutral names, 4 generation workers.
+
+| Run | nod | Resolved | Cost | Generation |
+| --- | --- | --- | --- | --- |
+| `nod-lite-full-20261025-065527` | `0050fbe` | **214/300 (71.3%)** | $5.95 | 6.9 h |
+| `nod-lite-fails86-20261025-224617` (run 1's 86 failures only) | `c5c68da` | 21/86 | $2.56 | 5.6 h |
+| `nod-lite-full2-20261026-070709` | `66a7d52` | **215/300 (71.7%)** | $3.51 by request | 8.2 h |
+
+Every run was leak-checked: no network attempt succeeded, and searches for the
+benchmark found nothing usable. Run 1's resolved patches match the upstream fix
+line for line in 68 of 214 cases, in line with the ~30% seen on the small
+samples (many Lite fixes are one to three lines). None of this rules out recall
+from training: these are public 2012-2023 issues, and the model talks about
+"the upstream fix" in the reasoning of 93% of resolved instances.
+
+### Why run 1's 86 failed
+
+Triage of all 86 against the upstream fix: 79 touch every file the fix touched
+(41 the same functions), 7 are in the wrong place, 2 hit the 100-turn limit,
+none edit tests. Nod finds the right code and gets the behavior wrong.
+
+A stratified sample of 20 was root-caused trace by trace, with each claim
+checked against the patches and hidden tests:
+
+| Category | Count | Examples |
+| --- | --- | --- |
+| Underspecified: the hidden test pins a detail the issue never states | 9 | exact LaTeX strings, `S.One` vs `1`, an exact log message, a design only in maintainer hints |
+| Wrong behavior choice | 5 | raising `ValueError` where operators return `NotImplemented`; a silent alias instead of a deprecation warning |
+| Incomplete fix | 3 | fixed SELECT but not GROUP BY; `__eq__` without `__hash__` |
+| Wrong root cause | 1 | had the real fix, then reverted it for a remembered upstream approach |
+| Broke existing behavior | 1 | changed a lookup key and broke the old docstring form |
+| Unexplained | 1 | sympy-13146; passes locally (it passed in the rerun) |
+
+Patterns: trusting a remembered upstream fix that was wrong (6 of 20); spotting
+a likely failing case and moving on ("both unhashable. Fine", 5 of 20);
+ignoring codebase conventions (4 of 20). Failures also hunted the filesystem
+far more than successes (91% vs 58% of instances, 6.6 vs 2.5 commands each).
+
+### Harness problems found and fixed
+
+- Nod's file tools run on the host and `run_shell` in the container; only the
+  repo was shared, so files in `/tmp` and the saved full text of truncated
+  output weren't visible across the two. A shared scratch dir is now mounted at
+  the same path and used as `$TMPDIR` (`b2d5e7e`).
+- `run_shell` returned nothing on timeout, and 60s was too short for some test
+  files (sympy's `test_arit.py`). Timeouts now return partial output; the bench
+  allows 180s (`4f7273e`).
+- Tool-format slips (`read_file(limit=...)`, `*** Begin Patch` sent to
+  `cud_file`) now get an alias or a clear error (`3fd6000`).
+- Instructions now cover the three patterns above, and treat a remembered
+  upstream fix as a guess to verify (`c5c68da`).
+- Per-instance grading logs are now fetched (myinfra `186e540`), and each
+  model reply records its timing, provider, token usage and exact cost, with
+  stalled requests retried (`66a7d52`). Two instances had earlier lost their
+  patch to a single stalled response.
+
+These were real but small: together they touched a handful of the 86.
+
+### The rerun of the 86, and why it overstated the gain
+
+Rerunning only run 1's failures on `c5c68da` flipped 21 of 86, with filesystem
+hunting down from 564 commands to 48 and turns down 29%. But without a control
+that number mixes the changes with luck. django-13768, judged unwinnable from
+the issue, passed because the model recalled the upstream commit's exact log
+message ("Django upstream fix (commit) adds: ... 'Error calling %s in
+Signal.send_robust() (%s)'"); in run 1 it had recalled a wrong one.
+
+### Run 2: no net change, and how noisy a run is
+
+Run 2 (same agent behavior as the rerun, plus logging and retries) scored
+215 against run 1's 214: **17 gained, 16 lost**. Only 10 of the rerun's 21
+flips held. 33 instances (11%) passed in exactly one of the two full runs; 198
+passed in both and 231 in at least one.
+
+So a single 300-instance run can't show a change of a few instances: the noise
+between identical configurations is about ±16. The changes did change behavior
+(filesystem hunting 1,110 commands to 118, turns 11,189 to 9,750, network
+attempts 87 to 44), making nod tidier and cheaper, but their effect on the
+score is smaller than the noise.
+
+### Latency
+
+The 86 rerun took 30.5 s per turn against run 1's 11.9 s on the same
+instances, with test execution flat at ~1% of wall time, so the slowdown was
+the model's responses. The rerun ran overnight UTC; both full runs ran in UTC
+daytime. Run 2 is the first with per-request timing: time to first token had a
+median of about 1 s every hour from 07:00 to 15:00 UTC (p90 2-3 s), and the run
+averaged 12.1 s per turn. Request duration rose from 3.2 s to 7 s over the day,
+but instances run alphabetically, so the sympy-heavy end carries longer
+contexts; that rise is probably workload, not time of day. No overnight
+request data exists yet to confirm the time-of-day explanation.
+
+### Lessons
+
+- Measure changes with repeated runs, not one. Compare averages over a few
+  runs per configuration, or how many instances pass at least once.
+- A rerun of only the failures overstates any fix: it can only gain, and luck
+  alone flips some.
+- Generation is latency-bound, so more workers would shorten runs, until Docker
+  Hub's 100 pulls per hour sets the floor (about 3 hours for 300 images).
+- SWE-bench Lite's underspecified instances (about half of the sampled
+  failures) cap what agent changes can show. SWE-bench Verified was built to
+  remove them.
