@@ -24,8 +24,12 @@ max_turns = 20
 # Nod's persona / base system prompt. Relative paths resolve from this file.
 soul_path = "SOUL.md"
 
-# Where conversation history is stored (JSON files, one per session).
+# Where conversation history is stored (JSONL files, one per session).
 memory_dir = "~/.nod/memory"
+
+# Where background jobs (from nod-extras) keep their logs and job record, one
+# directory per session.
+jobs_dir = "/var/tmp/nod-jobs"
 
 # Directories scanned for SKILL.md files. The "millions of skills" live here,
 # never in the core repo. Defaults to a sibling nod-extras/skills if present.

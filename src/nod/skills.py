@@ -37,7 +37,10 @@ class SkillLoader:
         self.reload()
 
     def reload(self) -> None:
-        self._by_name = {}
+        # Build the new index and swap it in with one assignment: the loader is
+        # shared by every agent in the process, and a reader on another thread
+        # must never see a half-filled dict.
+        by_name: dict[str, Skill] = {}
         for root in self._dirs:
             if not root.is_dir():
                 continue
@@ -45,7 +48,8 @@ class SkillLoader:
                 skill = _parse_skill(skill_file)
                 if skill is not None:
                     # First definition of a name wins; warn-free, deterministic.
-                    self._by_name.setdefault(skill.name, skill)
+                    by_name.setdefault(skill.name, skill)
+        self._by_name = by_name
 
     @property
     def skills(self) -> list[Skill]:

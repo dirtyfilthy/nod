@@ -34,6 +34,9 @@ class Config:
     max_turns: int = 20
     soul_path: str = "SOUL.md"
     memory_dir: str = "~/.nod/memory"
+    # Where background jobs keep their record and logs (nod-extras). One
+    # directory per session; a restarted Nod reads it to report lost jobs.
+    jobs_dir: str = "/var/tmp/nod-jobs"
     skills_dirs: list[str] = field(default_factory=lambda: ["../nod-extras/skills"])
     # HTTP service (`nod serve`). Loopback by default; front it with a reverse
     # proxy or tunnel to expose it. The auth token is read from the environment,
@@ -82,6 +85,7 @@ def load(path: str | Path | None = None) -> Config:
         "max_turns",
         "soul_path",
         "memory_dir",
+        "jobs_dir",
         "skills_dirs",
         "host",
         "port",

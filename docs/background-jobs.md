@@ -1,7 +1,15 @@
 # Background jobs: design note
 
-Status: **proposed, not implemented.** Checked against the code on
-2026-10-27; the corrections from that review are folded in below.
+Status: **implemented** on 2026-10-27, all three phases. The core part
+(`Inbox`, the deliver-persist-ack step, the session lock, `send` /
+`_run_turn` / `wake`, both gateways) is in this repo; the `Jobs` manager, the
+kinds and the tools are `nod_extras/jobs.py` in the sibling `nod-extras`
+repo, wired in by `cli.py:build_agent`. Two places where the code is plainer
+than the text below: there is no job queue, so "running or queued" limits
+are just a running limit per kind and session (8 shell, 3 agent), and a
+start past the limit is an error telling the model to wait or kill first;
+and the bench's `docker exec` kill hook is a constructor argument on
+`ShellJobKind` (`kill`) that the bench does not use yet.
 
 A design for letting Nod start work in the background, carry on with other
 work, and be told automatically when each piece finishes, fails or times out.
