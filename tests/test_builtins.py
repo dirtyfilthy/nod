@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import threading
+import time
+from pathlib import Path
+
 from nod.builtins import builtin_tools
 from nod.messages import ToolCall
 from nod.tools import ToolRegistry
@@ -120,8 +124,54 @@ def test_cud_file_missing_search_returns_error(tmp_path):
         )
     )
 
-    assert out == f"error: {path}: SEARCH text not found"
+    assert out == (
+        f"error: {path}: SEARCH text not found; the file may have changed, "
+        "so re-read it and copy SEARCH from its current contents"
+    )
     assert path.read_text(encoding="utf-8") == "actual contents"
+
+
+def test_cud_file_concurrent_edits_to_one_file_both_land(tmp_path, monkeypatch):
+    # Two agents (threads) editing different lines of one file. Without the
+    # lock, the second reads the file while the first is between its read and
+    # its write, and the first edit is silently lost.
+    path = tmp_path / "module.py"
+    path.write_text("a = 1\nb = 1\n", encoding="utf-8")
+    first_has_read = threading.Event()
+    original_read_text = Path.read_text
+
+    def slow_first_read(self, *args, **kwargs):
+        content = original_read_text(self, *args, **kwargs)
+        if self == path and not first_has_read.is_set():
+            first_has_read.set()
+            time.sleep(0.2)
+        return content
+
+    monkeypatch.setattr(Path, "read_text", slow_first_read)
+    registry = _registry()
+    outputs: list[str] = []
+
+    def edit(search: str, replacement: str) -> None:
+        outputs.append(
+            registry.dispatch(
+                ToolCall(
+                    id="1",
+                    name="cud_file",
+                    arguments={"edits": _cud_block(str(path), search, replacement)},
+                )
+            )
+        )
+
+    first = threading.Thread(target=edit, args=("a = 1", "a = 2"))
+    second = threading.Thread(target=edit, args=("b = 1", "b = 2"))
+    first.start()
+    assert first_has_read.wait(timeout=5)
+    second.start()
+    first.join()
+    second.join()
+
+    assert all(out.startswith("updated ") for out in outputs)
+    assert original_read_text(path, encoding="utf-8") == "a = 2\nb = 2\n"
 
 
 def test_cud_file_ambiguous_search_requires_more_context(tmp_path):

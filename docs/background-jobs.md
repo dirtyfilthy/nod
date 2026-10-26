@@ -156,9 +156,20 @@ from a signal exit code such as -15.
   Tools with shared state need checking before this ships; `SkillLoader`
   rescans directories on every access and is the first one to look at.
 - **Shared filesystem.** A subagent works in the same directory with the same
-  file tools as its parent. Two agents editing one file will clash. Phase 1
-  documents this and leaves coordination to the parent's instructions; no
-  locking.
+  file tools as its parent. For `cud_file` this is already safe enough:
+  - A process-wide lock (`_CUD_LOCK` in `builtins.py`) runs one `cud_file`
+    call at a time. Two agents can't lose each other's edits between a read
+    and a write, and a multi-block edit can't be interleaved with another.
+  - Updates are SEARCH/REPLACE anchored on exact text, and creating a file
+    fails if it exists. So an edit made from a stale view fails with
+    `SEARCH text not found` instead of clobbering. The error tells the
+    model to re-read the file.
+
+  There are deliberately no per-file leases held across turns: they would
+  need expiry, release on cancel and model cooperation, and the anchored
+  format already handles stale views. **Shell edits are not covered.** A
+  `sed -i` or a formatter run by one agent still races with the other's
+  edits; coordinating that is left to the parent's instructions.
 
 ### 3. Tools
 
@@ -275,8 +286,9 @@ Following the thin-core rule:
 When one model reply contains several tool calls, `Agent.send` dispatches
 them one after another. Running them in a thread pool gives some parallelism
 within a turn without any of the above. Results must still be appended in the
-order of the calls, and two `run_shell` calls running at once can clash on
-the same files, just like subagents.
+order of the calls. `cud_file` calls are already serialized by its lock, but
+two `run_shell` calls running at once can clash on the same files, just like
+subagents.
 
 ## Testing
 

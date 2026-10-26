@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 import httpx
@@ -24,6 +25,10 @@ FILE_HEADER_RE = re.compile(r"^### FILE: (.+)$", re.MULTILINE)
 APPLY_PATCH_RE = re.compile(
     r"^\*\*\* (Begin Patch|Update File:|Add File:|Delete File:)", re.MULTILINE
 )
+# One cud_file call at a time per process, so agents running in threads can't
+# lose each other's edits between a read and a write. Shell edits aren't
+# covered.
+_CUD_LOCK = threading.Lock()
 
 
 def _truncate_shell_output(
@@ -298,7 +303,10 @@ def _apply_cud_operation(operation: _CUDOperation) -> str:
 
     matches = content.count(operation.search)
     if matches == 0:
-        return f"error: {operation.path}: SEARCH text not found"
+        return (
+            f"error: {operation.path}: SEARCH text not found; the file may have "
+            "changed, so re-read it and copy SEARCH from its current contents"
+        )
     if matches > 1:
         return (
             f"error: {operation.path}: SEARCH text matched {matches} times; "
@@ -336,7 +344,9 @@ def cud_file_tool() -> Tool:
         },
     )
     def cud_file(edits: str) -> str:
-        return "\n".join(_apply_cud_operation(op) for op in _parse_cud_blocks(edits))
+        operations = _parse_cud_blocks(edits)
+        with _CUD_LOCK:
+            return "\n".join(_apply_cud_operation(op) for op in operations)
 
     return cud_file
 
