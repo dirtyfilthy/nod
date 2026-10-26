@@ -141,3 +141,77 @@ def test_payload_includes_reasoning_when_set():
 
 def test_payload_omits_reasoning_by_default():
     assert "reasoning" not in _provider()._payload([], None)
+
+
+META_LINES = [
+    'data: {"id":"gen-1","provider":"DeepInfra","choices":[{"delta":{"role":"assistant"}}]}',
+    'data: {"id":"gen-1","provider":"DeepInfra","choices":[{"delta":{"reasoning":"hm"}}]}',
+    'data: {"id":"gen-1","provider":"DeepInfra","choices":[{"delta":{"content":"ok"}}]}',
+    'data: {"id":"gen-1","provider":"DeepInfra","choices":[{"delta":{}}],"usage":{"prompt_tokens":10,'
+    '"completion_tokens":5,"cost":0.001,"completion_tokens_details":{"reasoning_tokens":3},'
+    '"prompt_tokens_details":{"cached_tokens":4}}}',
+    "data: [DONE]",
+]
+
+
+def test_consume_records_timing_provider_and_usage():
+    # With no deadline the clock is read only for the first token and the end.
+    clock = iter([1.5, 3.0])
+    msg = _provider()._consume(iter(META_LINES), None, deadline=None, start=0.0, now=lambda: next(clock))
+    assert msg.content == "ok"
+    assert msg.meta["provider"] == "DeepInfra"
+    assert msg.meta["generation_id"] == "gen-1"
+    assert msg.meta["ttft_s"] == 1.5  # first chunk carrying reasoning
+    assert msg.meta["duration_s"] == 3.0
+    assert msg.meta["usage"] == {
+        "prompt_tokens": 10, "completion_tokens": 5, "reasoning_tokens": 3, "cached_tokens": 4, "cost": 0.001,
+    }
+
+
+def test_complete_retries_retryable_failures_and_records_attempts(monkeypatch):
+    from nod.messages import Message
+    from nod.provider import _RetryableError
+
+    slept: list[float] = []
+    p = OpenAICompatibleProvider(model="m", api_key="x", sleep=slept.append)
+    outcomes = iter([_RetryableError("stalled"), Message(role="assistant", content="ok")])
+
+    def once(messages, tools, on_token):
+        nxt = next(outcomes)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    monkeypatch.setattr(p, "_complete_once", once)
+    msg = p.complete([])
+    assert msg.content == "ok"
+    assert msg.meta["attempts"] == 2
+    assert msg.meta["started_at"].endswith("Z")
+    assert slept == [5.0]
+
+
+def test_complete_gives_up_after_retries_and_skips_non_retryable(monkeypatch):
+    from nod.provider import _RetryableError
+
+    p = OpenAICompatibleProvider(model="m", api_key="x", retries=2, sleep=lambda s: None)
+    calls = []
+
+    def stalled(messages, tools, on_token):
+        calls.append(1)
+        raise _RetryableError("stalled")
+
+    monkeypatch.setattr(p, "_complete_once", stalled)
+    with pytest.raises(ProviderError, match="stalled"):
+        p.complete([])
+    assert len(calls) == 3
+
+    calls.clear()
+
+    def bad_request(messages, tools, on_token):
+        calls.append(1)
+        raise ProviderError("400 from provider: bad")
+
+    monkeypatch.setattr(p, "_complete_once", bad_request)
+    with pytest.raises(ProviderError, match="400"):
+        p.complete([])
+    assert len(calls) == 1

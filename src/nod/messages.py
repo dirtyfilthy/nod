@@ -65,6 +65,9 @@ class Message:
     kind: str = "message"
     reasoning: str = ""
     reasoning_details: list[dict[str, Any]] = field(default_factory=list)
+    # Bookkeeping about how a reply was produced (timing, token usage, cost,
+    # serving provider). Stored with the message, never sent to the model.
+    meta: dict[str, Any] = field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -101,6 +104,7 @@ class Message:
             "tool_call_id": self.tool_call_id,
             "reasoning": self.reasoning,
             "reasoning_details": self.reasoning_details,
+            "meta": self.meta,
         }
 
     @classmethod
@@ -117,6 +121,7 @@ class Message:
             kind=raw.get("kind", "message"),
             reasoning=raw.get("reasoning", "") or "",
             reasoning_details=raw.get("reasoning_details") or [],
+            meta=raw.get("meta") or {},
         )
 
 

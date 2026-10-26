@@ -56,6 +56,8 @@ class OpenAICompatibleProvider:
         extra_headers: dict[str, str] | None = None,
         provider_routing: dict[str, Any] | None = None,
         reasoning: dict[str, Any] | None = None,
+        retries: int = 2,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -74,6 +76,10 @@ class OpenAICompatibleProvider:
         # OpenRouter's `reasoning` request field, e.g. {"effort": "high"} or
         # {"enabled": False}. Omitted when empty, leaving the model's default.
         self.reasoning = reasoning or {}
+        # Extra attempts for failures that are worth trying again: a stalled
+        # stream, a dropped connection, 429 or 5xx. Other errors fail at once.
+        self.retries = retries
+        self._sleep = sleep
         if not self.api_key:
             raise ProviderError(
                 f"No API key. Set ${api_key_env} or pass api_key explicitly."
@@ -85,6 +91,30 @@ class OpenAICompatibleProvider:
         tools: list[dict[str, Any]] | None = None,
         on_token: OnToken | None = None,
     ) -> Message:
+        attempt = 0
+        while True:
+            attempt += 1
+            started_at = time.time()
+            try:
+                reply = self._complete_once(messages, tools, on_token)
+            except _RetryableError as exc:
+                if attempt > self.retries:
+                    raise ProviderError(str(exc)) from exc
+                # A retried stream may already have sent some tokens to on_token.
+                self._sleep(min(60.0, 5.0 * 2 ** (attempt - 1)))
+                continue
+            reply.meta["started_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_at)
+            )
+            reply.meta["attempts"] = attempt
+            return reply
+
+    def _complete_once(
+        self,
+        messages: list[Message],
+        tools: list[dict[str, Any]] | None,
+        on_token: OnToken | None,
+    ) -> Message:
         payload = self._payload(messages, tools)
 
         headers = {
@@ -93,11 +123,8 @@ class OpenAICompatibleProvider:
             **self.extra_headers,
         }
 
-        deadline = (
-            time.monotonic() + self.deadline_seconds
-            if self.deadline_seconds
-            else None
-        )
+        start = time.monotonic()
+        deadline = start + self.deadline_seconds if self.deadline_seconds else None
 
         try:
             with httpx.Client(timeout=self.timeout) as client:
@@ -109,12 +136,17 @@ class OpenAICompatibleProvider:
                 ) as response:
                     if response.status_code >= 400:
                         body = response.read().decode("utf-8", "replace")
-                        raise ProviderError(
-                            f"{response.status_code} from provider: {body}"
+                        error = (
+                            _RetryableError
+                            if response.status_code == 429 or response.status_code >= 500
+                            else ProviderError
                         )
-                    return self._consume(response.iter_lines(), on_token, deadline)
+                        raise error(f"{response.status_code} from provider: {body}")
+                    return self._consume(
+                        response.iter_lines(), on_token, deadline, start=start
+                    )
         except httpx.HTTPError as exc:
-            raise ProviderError(f"request to provider failed: {exc}") from exc
+            raise _RetryableError(f"request to provider failed: {exc}") from exc
 
     def _payload(
         self, messages: list[Message], tools: list[dict[str, Any]] | None
@@ -138,27 +170,44 @@ class OpenAICompatibleProvider:
         on_token: OnToken | None,
         deadline: float | None,
         *,
+        start: float | None = None,
         now: Callable[[], float] = time.monotonic,
     ) -> Message:
         """Assemble streamed SSE lines into one message, aborting past `deadline`.
 
-        Factored out so the streaming/deadline logic is testable without a live
-        connection.
+        Also records how the reply was produced in `meta`: time to first token
+        and total duration (from `start`), the serving provider, the generation
+        id, and token usage and cost from the final chunk. Factored out so the
+        streaming/deadline logic is testable without a live connection.
         """
 
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_acc = _ToolCallAccumulator()
         details_acc = _ReasoningDetailsAccumulator()
+        meta: dict[str, Any] = {}
         for line in lines:
             if deadline is not None and now() >= deadline:
-                raise ProviderError(
+                raise _RetryableError(
                     f"provider stream exceeded {self.deadline_seconds:.0f}s "
                     "deadline (stalled?)"
                 )
-            delta = _parse_sse_line(line)
-            if delta is None:
+            chunk = _parse_sse_chunk(line)
+            if chunk is None:
                 continue
+            for key, name in (("provider", "provider"), ("id", "generation_id")):
+                if chunk.get(key):
+                    meta[name] = chunk[key]
+            if chunk.get("usage"):
+                meta["usage"] = _usage_summary(chunk["usage"])
+            choices = chunk.get("choices") or []
+            delta = (choices[0].get("delta") or {}) if choices else {}
+            if not delta:
+                continue
+            if start is not None and "ttft_s" not in meta and any(
+                delta.get(k) for k in ("content", "reasoning", "reasoning_content", "tool_calls")
+            ):
+                meta["ttft_s"] = round(now() - start, 3)
             text = delta.get("content")
             if text:
                 content_parts.append(text)
@@ -174,17 +223,39 @@ class OpenAICompatibleProvider:
             for detail in delta.get("reasoning_details", []) or []:
                 details_acc.add(detail)
 
+        if start is not None:
+            meta["duration_s"] = round(now() - start, 3)
         return Message(
             role="assistant",
             content="".join(content_parts),
             tool_calls=tool_acc.finish(),
             reasoning="".join(reasoning_parts),
             reasoning_details=details_acc.finish(),
+            meta=meta,
         )
 
 
-def _parse_sse_line(line: str) -> dict[str, Any] | None:
-    """Extract the choice delta from one server-sent-events line, if any."""
+class _RetryableError(ProviderError):
+    """A failure worth retrying: stalled stream, dropped connection, 429, 5xx."""
+
+
+def _usage_summary(usage: dict[str, Any]) -> dict[str, Any]:
+    """The usage fields worth keeping from a final stream chunk."""
+
+    completion = usage.get("completion_tokens_details") or {}
+    prompt = usage.get("prompt_tokens_details") or {}
+    summary = {
+        "prompt_tokens": usage.get("prompt_tokens"),
+        "completion_tokens": usage.get("completion_tokens"),
+        "reasoning_tokens": completion.get("reasoning_tokens"),
+        "cached_tokens": prompt.get("cached_tokens"),
+        "cost": usage.get("cost"),
+    }
+    return {k: v for k, v in summary.items() if v is not None}
+
+
+def _parse_sse_chunk(line: str) -> dict[str, Any] | None:
+    """Parse one server-sent-events line into its JSON chunk, if any."""
 
     if not line or not line.startswith("data:"):
         return None
@@ -192,8 +263,16 @@ def _parse_sse_line(line: str) -> dict[str, Any] | None:
     if not data or data == "[DONE]":
         return None
     try:
-        chunk = json.loads(data)
+        return json.loads(data)
     except json.JSONDecodeError:
+        return None
+
+
+def _parse_sse_line(line: str) -> dict[str, Any] | None:
+    """Extract the choice delta from one server-sent-events line, if any."""
+
+    chunk = _parse_sse_chunk(line)
+    if chunk is None:
         return None
     choices = chunk.get("choices") or []
     if not choices:

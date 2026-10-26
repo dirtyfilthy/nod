@@ -101,3 +101,11 @@ def test_old_storage_without_reasoning_still_loads():
     restored = Message.from_storage_dict({"role": "assistant", "content": "hi"})
     assert restored.reasoning == ""
     assert restored.reasoning_details == []
+
+
+def test_meta_is_stored_but_never_sent_to_the_provider():
+    msg = Message(role="assistant", content="ok", meta={"duration_s": 1.2, "usage": {"cost": 0.001}})
+    assert "meta" not in msg.to_provider_dict()
+    restored = Message.from_storage_dict(msg.to_storage_dict())
+    assert restored.meta == {"duration_s": 1.2, "usage": {"cost": 0.001}}
+    assert Message.from_storage_dict({"role": "assistant", "content": "x"}).meta == {}
