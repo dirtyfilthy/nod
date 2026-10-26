@@ -191,3 +191,52 @@ def test_graceful_sigterm_shutdown():
         if proc.poll() is None:
             proc.kill()
             proc.communicate()
+
+
+def test_wakeup_reply_is_attached_to_next_response():
+    # An inbox post between requests wakes the agent on its own thread; the
+    # reply of that turn rides along with the next response for the session.
+    agent = _agent([assistant("first"), assistant("woke"), assistant("second")])
+    with running(agent) as (host, port):
+        _, b1 = request(host, port, "POST", "/chat", body={"message": "x", "session": "s"})
+        agent.inbox.post("s", "<job-finished id=1>x</job-finished>")
+        deadline = time.time() + 5
+        while time.time() < deadline and len(agent.provider.calls) < 2:
+            time.sleep(0.02)
+        # Let the wake thread store its reply before the next request collects.
+        deadline = time.time() + 5
+        while time.time() < deadline and agent.memory.load("s")[-1].content != "woke":
+            time.sleep(0.02)
+        time.sleep(0.05)
+        _, b2 = request(host, port, "POST", "/chat", body={"message": "y", "session": "s"})
+        _, b3 = request(host, port, "POST", "/chat", body={"message": "z", "session": "s"})
+    assert b1 == {"session": "s", "reply": "first"}
+    assert b2 == {"session": "s", "reply": "second", "wakeups": ["woke"]}
+    assert "wakeups" not in b3
+
+
+def test_concurrent_requests_on_one_session_run_one_at_a_time():
+    import threading as _threading
+
+    order: list[str] = []
+
+    def slow(_messages):
+        order.append("start")
+        time.sleep(0.2)
+        order.append("end")
+        return assistant("ok")
+
+    agent = _agent([slow, slow])
+    with running(agent) as (host, port):
+        threads = [
+            _threading.Thread(
+                target=request, args=(host, port, "POST", "/chat"),
+                kwargs={"body": {"message": "x", "session": "same"}},
+            )
+            for _ in range(2)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+    assert order == ["start", "end", "start", "end"]

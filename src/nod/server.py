@@ -1,13 +1,19 @@
 """HTTP gateway: run the agent as a service, on the standard library alone.
 
 No web framework. A `ThreadingHTTPServer` maps cleanly onto the synchronous
-agent loop -- each request gets its own thread, and a per-session lock keeps
-concurrent calls to the same conversation from racing on the `Memory` store.
+agent loop -- each request gets its own thread, and the agent's per-session
+lock keeps concurrent calls to the same conversation from racing on the
+`Memory` store.
 
 The API is two endpoints:
 
     POST /chat     {"message": "...", "session": "..."} -> {"session", "reply"}
     GET  /healthz  -> {"status": "ok"}   (no auth, no model call)
+
+When something is posted to a session's inbox between requests (a background
+job finishing), the server wakes the agent on a thread of its own. The reply
+of such a turn has nowhere to go, so it is kept and attached to the next
+`POST /chat` response for that session as `"wakeups": [...]`.
 
 `POST /chat` requires `Authorization: Bearer <token>`; the built-in tools have
 the reach of the process user, so an open port would be a liability.
@@ -29,22 +35,6 @@ from nod.agent import Agent
 MAX_BODY_BYTES = 1 << 20  # 1 MiB
 
 
-class _SessionLocks:
-    """Hands out one lock per session id, created on first use."""
-
-    def __init__(self) -> None:
-        self._guard = threading.Lock()
-        self._locks: dict[str, threading.Lock] = {}
-
-    def get(self, session_id: str) -> threading.Lock:
-        with self._guard:
-            lock = self._locks.get(session_id)
-            if lock is None:
-                lock = threading.Lock()
-                self._locks[session_id] = lock
-            return lock
-
-
 def build_server(
     agent: Agent,
     token: str,
@@ -62,7 +52,27 @@ def build_server(
     if not token:
         raise ValueError("an API token is required; set $NOD_API_TOKEN before serving")
 
-    locks = _SessionLocks()
+    # Replies from wake-ups, per session, until the next request collects them.
+    wakeups_guard = threading.Lock()
+    wakeups: dict[str, list[str]] = {}
+
+    def on_post(session: str) -> None:
+        # Runs on the poster's thread (the job reaper); the turn itself must
+        # not, so hand it to a thread. The agent's session lock serializes it
+        # against requests on the same session.
+        def run() -> None:
+            try:
+                reply = agent.wake(session)
+            except Exception as exc:  # noqa: BLE001 - report with the next reply
+                reply = f"[error] {exc}"
+            if reply is None:
+                return
+            with wakeups_guard:
+                wakeups.setdefault(session, []).append(reply)
+
+        threading.Thread(target=run, name=f"nod-wake-{session}", daemon=True).start()
+
+    agent.inbox.subscribe(on_post)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "nod/0.1"
@@ -139,12 +149,16 @@ def build_server(
             self._session = session
 
             try:
-                with locks.get(session):
-                    reply = agent.send(message, session_id=session)
+                reply = agent.send(message, session_id=session)
             except Exception as exc:  # noqa: BLE001 - report, keep serving
                 self._send_json(502, {"detail": str(exc)})
                 return
-            self._send_json(200, {"session": session, "reply": reply})
+            payload = {"session": session, "reply": reply}
+            with wakeups_guard:
+                earlier = wakeups.pop(session, None)
+            if earlier:
+                payload["wakeups"] = earlier
+            self._send_json(200, payload)
 
         def log_message(self, *args) -> None:
             # Silence per-request stderr logging; the startup banner is enough.

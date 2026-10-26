@@ -12,10 +12,11 @@ A deliberately thin agent core: rent the brain (any OpenAI-compatible LLM endpoi
 | Conversation | `messages.py` | dataclasses | n/a |
 | Tools | `tools.py` | `ToolRegistry` | registering `Tool`s |
 | Skills | `skills.py` | markdown + `read_skill` | adding `SKILL.md` files |
-| Memory | `memory.py` | JSON files | passing any `Memory` |
+| Memory | `memory.py` | append-only JSONL files | passing any `Memory` |
+| Inbox | `inbox.py` | in-memory event list | passing any `Inbox` |
 | I/O | `gateway.py` / `server.py` | CLI or HTTP | passing any `Gateway` |
 
-The whole agent is a thin synchronous loop in `agent.py`: ask the brain, run any tools it asked for, repeat until it answers.
+The whole agent is a thin synchronous loop in `agent.py`: ask the brain, run any tools it asked for, repeat until it answers. Before each call to the brain it empties the session's inbox: anything posted there while it wasn't looking (a background job finishing) becomes a user message. A gateway can also `wake` an idle agent to run a turn on pending events alone.
 
 ## Quickstart
 
@@ -42,6 +43,8 @@ The service is built on the standard library alone (`http.server`), so it adds n
 - `POST /chat` with `{"message": "...", "session": "..."}` returns `{"session": "...", "reply": "..."}`. The `session` (default `api`) maps onto the `Memory` layer, so conversations stay isolated and survive restarts. Every request must carry `Authorization: Bearer $NOD_API_TOKEN`.
 - `GET /healthz` is an unauthenticated liveness probe that makes no LLM call.
 
+When something is posted to a session's inbox between requests (a background job ending), the server runs a turn on its own. That reply has nowhere to go, so it is attached to the next `POST /chat` response for the session as `"wakeups": [...]`; the field is absent when there is nothing to attach.
+
 The service refuses to start without `NOD_API_TOKEN`, since the built-in tools give it the full reach of the process user. It binds loopback by default; put it behind a reverse proxy or SSH tunnel to reach it remotely, and change the address with `host`/`port` in `config.toml` or `--host`/`--port`. It shuts down cleanly on `SIGTERM`, so `systemctl stop`/`restart` is graceful rather than a hard kill. Each request prints one concise access-log line to stdout (client, method, path, status, session, duration) for `journalctl -u nod` -- never the token or message body.
 
 It's a new `HTTPGateway` (see `server.py`) alongside the `CLIGateway`; the agent core is untouched, and the whole thing is ~150 lines of stdlib. A ready-to-edit systemd unit and env-file template live in `deploy/`.
@@ -50,7 +53,7 @@ It's a new `HTTPGateway` (see `server.py`) alongside the `CLIGateway`; the agent
 
 The core ships five small tools: `read_file`, `cud_file`, `list_dir`, `run_shell`, and `http_get`. `read_file` returns paginated line ranges with offsets, and `cud_file` creates, updates, and deletes files with SEARCH/REPLACE blocks. They are deliberately plain and registered in `cli.py` so you can remove or replace any of them in one place.
 
-Anything richer belongs in `nod-extras` later.
+Anything richer belongs in the sibling `nod-extras` repo. The first thing there is background jobs: with `nod-extras` on the path (`uv run --with-editable ../nod-extras nod`), `build_agent` adds `start_shell_job`, `spawn_agent`, `list_jobs`, `kill_job` and `wait_jobs`. A shell job runs a command in its own process group with its output in a log file; an agent job hands a task to a subagent in a child session. Every job has a deadline and can be cancelled, and when it ends a `<job-finished>` event is posted to the session's inbox, so Nod hears about it at its next turn, or is woken for one. Job logs and the job record live under `jobs_dir` (default `/var/tmp/nod-jobs`), and a restarted Nod reports the jobs a dead one left as `lost`. The design is in `docs/background-jobs.md`.
 
 ## Security model
 
