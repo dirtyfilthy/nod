@@ -104,10 +104,13 @@ The `Jobs` manager owns:
   id the inbox returns on the job. That id is how `wait_jobs` finds the event
   and takes it out of the inbox.
 - **A job record on disk** (`<jobs_dir>/<session>/jobs.jsonl`: id, kind,
-  pid or child session, start time, deadline, owning Nod pid). This is what
-  lets a restarted Nod find jobs started by a dead process and report them as
-  `lost` instead of forgetting them silently, and where the next id comes
-  from. `jobs_dir` defaults to `/var/tmp/nod-jobs`; the bench points it at
+  pid or child session, start time, deadline, owning Nod pid and lock file).
+  This is what lets a restarted Nod find jobs started by a dead process and
+  report them as `lost` instead of forgetting them silently, and where the
+  next id comes from. Whether the owner is dead is decided by its lock file
+  under `<jobs_dir>/owners/`, which it holds with `flock` for its whole life
+  and the OS releases when it dies; a bare pid check would be fooled by a
+  recycled pid. `jobs_dir` defaults to `/var/tmp/nod-jobs`; the bench points it at
   the scratch dir (see the shell kind).
 - **Cancelling every job on shutdown** (`atexit` plus `SIGTERM`/`SIGINT`
   handlers). This doesn't run if Nod is `SIGKILL`ed, which is why the job
