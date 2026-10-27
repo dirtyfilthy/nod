@@ -243,3 +243,204 @@ def test_pull_image_gives_up_on_other_errors_and_after_max_wait(monkeypatch):
     slept = []
     assert not run_nod.pull_image("img", log=lambda m: None, sleep=slept.append)
     assert sum(slept) == run_nod.PULL_RATE_LIMIT_MAX_WAIT_SECONDS
+
+
+# --- --extras: nod-extras' background jobs in the bench ---------------------------
+
+
+def test_container_job_argv_has_no_bench_timeout_and_records_its_group(tmp_path):
+    run_nod = _load_run_nod_module()
+
+    argv = run_nod.container_job_argv("c", "/w/repo-tmp", str(tmp_path))("pytest -x")
+
+    assert "TMPDIR=/w/repo-tmp" in argv
+    assert "timeout" not in argv
+    i = argv.index("c")
+    assert argv[i + 1:i + 3] == ["setsid", "-w"]
+    assert argv[-2] == "pytest -x"
+    assert os.path.dirname(argv[-1]) == str(tmp_path)  # where the group id goes
+    assert argv[-1] != run_nod.container_job_argv("c", "/w", str(tmp_path))("x")[-1]
+
+
+def test_container_job_kill_signals_the_group_inside_the_container(monkeypatch, tmp_path):
+    import signal
+    import subprocess
+
+    run_nod = _load_run_nod_module()
+    docker, host = [], []
+    status = {"code": 0}
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: (docker.append(cmd), subprocess.CompletedProcess(cmd, status["code"]))[1])
+    monkeypatch.setattr(run_nod.os, "killpg", lambda pid, sig: host.append((pid, sig)))
+
+    class Proc:
+        pid = 4242
+        args = ["docker", "exec", "c", "bash", "cmd", str(tmp_path / "pg")]
+
+    kill = run_nod.container_job_kill("c")
+    (tmp_path / "pg").write_text("17\n")
+
+    kill(Proc, signal.SIGTERM)
+    # dash's kill (the images' sh) rejects `--`.
+    assert docker == [["docker", "exec", "-u", "0", "c", "sh", "-c", f"kill -{int(signal.SIGTERM)} -17"]]
+    assert host == []  # docker exec stays up until the command really ends
+
+    kill(Proc, signal.SIGKILL)
+    assert host == [(4242, signal.SIGKILL)]
+
+    host.clear()
+    status["code"] = 1  # the container couldn't be reached
+    kill(Proc, signal.SIGTERM)
+    assert host == [(4242, signal.SIGTERM)]
+
+    host.clear(), docker.clear()
+    (tmp_path / "pg").unlink()  # the command hasn't written its group yet
+    kill(Proc, signal.SIGTERM)
+    assert docker == [] and host == [(4242, signal.SIGTERM)]
+
+
+def _jobs_agent(run_nod, tmp_path, **kw):
+    return run_nod.build_bench_agent_with_jobs(
+        model="test-model", base_url="https://example.invalid/v1", max_turns=7, traces_dir=None,
+        shell_argv=None, scratch_dir=str(tmp_path), jobs_dir=str(tmp_path / "jobs"), container="c", **kw,
+    )
+
+
+def test_bench_agent_with_jobs_adds_the_job_tools_and_says_so(monkeypatch, tmp_path):
+    import pytest
+
+    pytest.importorskip("nod_extras.jobs")
+    run_nod = _load_run_nod_module()
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    plain = run_nod.build_bench_agent(model="m", base_url="https://example.invalid/v1", max_turns=7, traces_dir=None)
+    agent, jobs = _jobs_agent(run_nod, tmp_path)
+    try:
+        assert "spawn_agent" not in plain.registry and "Background jobs:" not in plain.system_prompt()
+        for name in ("start_shell_job", "spawn_agent", "list_jobs", "kill_job", "wait_jobs", "run_shell"):
+            assert name in agent.registry
+        assert "http_get" not in agent.registry
+        prompt = agent.system_prompt()
+        assert "Background jobs:" in prompt and "without its\n  180-second limit" in prompt
+        assert agent.inbox is jobs.inbox
+        assert (tmp_path / "jobs" / "pids").is_dir()
+
+        # A subagent gets the bench tools and environment, never the job tools.
+        child = jobs.kinds["agent"].child_factory(agent.provider)
+        assert "spawn_agent" not in child.registry and "start_shell_job" not in child.registry
+        assert "run_shell" in child.registry and "http_get" not in child.registry
+        assert child.soul.startswith("You are a subagent")
+        assert "Don't edit the\nrepository's test files" in child.soul
+        assert f"$TMPDIR, which is {tmp_path}" in child.soul
+    finally:
+        jobs.shutdown()
+
+
+def test_settle_jobs_wakes_the_agent_for_a_job_that_ends_after_its_reply(monkeypatch, tmp_path):
+    import pytest
+
+    pytest.importorskip("nod_extras.jobs")
+    from conftest import FakeProvider
+    from nod.agent import Agent
+    from nod.inbox import InMemoryInbox
+    from nod.memory import InMemoryMemory
+    from nod.messages import Message
+    from nod.tools import ToolRegistry
+    from nod_extras.jobs import Jobs, ShellJobKind
+
+    run_nod = _load_run_nod_module()
+    inbox = InMemoryInbox()
+    jobs = Jobs(inbox, [ShellJobKind()], jobs_dir=tmp_path, poll_interval=0.02)
+    provider = FakeProvider([Message(role="assistant", content="tests passed, done")])
+    agent = Agent(provider=provider, registry=ToolRegistry([]), memory=InMemoryMemory(), inbox=inbox)
+    try:
+        jobs.start("shell", "s", description="command: tests", command="sleep 0.3; echo ok")
+        run_nod.settle_jobs(agent, jobs, "s", log=lambda m: None)
+
+        assert len(provider.calls) == 1
+        assert "<job-finished id=1 kind=shell status=done" in provider.calls[0][-1].content
+        assert inbox.pending("s") == []
+        assert [j.status for j in jobs.list("s")] == ["done"]
+    finally:
+        jobs.shutdown()
+
+
+def test_settle_jobs_stops_at_the_wake_up_cap(tmp_path):
+    import pytest
+
+    pytest.importorskip("nod_extras.jobs")
+    from conftest import FakeProvider
+    from nod.agent import Agent
+    from nod.inbox import InMemoryInbox
+    from nod.memory import InMemoryMemory
+    from nod.tools import ToolRegistry
+    from nod_extras.jobs import Jobs, ShellJobKind
+
+    run_nod = _load_run_nod_module()
+    inbox = InMemoryInbox()
+    jobs = Jobs(inbox, [ShellJobKind()], jobs_dir=tmp_path, poll_interval=0.02)
+    agent = Agent(provider=FakeProvider([]), registry=ToolRegistry([]), memory=InMemoryMemory(), inbox=inbox, max_wakeups=0)
+    logged = []
+    try:
+        jobs.start("shell", "s", description="command: true", command="true")
+        run_nod.settle_jobs(agent, jobs, "s", log=logged.append)
+        assert logged[-1] == "! wake-up cap hit with job events unread"
+        assert len(inbox.pending("s")) == 1
+    finally:
+        jobs.shutdown()
+
+
+def test_extras_runs_under_a_neutral_session_and_renames_its_traces(monkeypatch, tmp_path):
+    import subprocess
+
+    run_nod = _load_run_nod_module()
+    seen = {}
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    work = tmp_path / "work"
+
+    class FakeJobs:
+        def shutdown(self):
+            seen["shutdown"] = True
+
+    class FakeAgent:
+        def send(self, prompt, session_id):
+            seen["session"] = session_id
+            (traces / f"{session_id}.jsonl").write_text("{}\n")
+            (traces / f"{session_id}_job-1.jsonl").write_text("{}\n")
+
+    def fake_build(**kw):
+        seen.update(jobs_dir=kw["jobs_dir"], scratch_dir=kw["scratch_dir"], container=kw["container"])
+        return FakeAgent(), FakeJobs()
+
+    def fake_start(image, name, host_dir, scratch_dir, log=print):
+        os.makedirs(host_dir)
+        return True
+
+    monkeypatch.setattr(run_nod, "start_container", fake_start)
+    monkeypatch.setattr(run_nod, "_run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "", ""))
+    monkeypatch.setattr(run_nod, "build_bench_agent_with_jobs", fake_build)
+    monkeypatch.setattr(run_nod, "settle_jobs", lambda agent, jobs, session_id, log: seen.update(settled=session_id))
+    inst = {"instance_id": "psf__requests-863", "image": "img", "base_commit": "x", "problem_statement": "p"}
+
+    run_nod.solve_instance(inst, model="m", base_url="u", max_turns=1, workdir=str(work),
+                           traces_dir=str(traces), extras=True)
+
+    # Job logs and subagent sessions are named after the session, so it must not
+    # reveal the instance.
+    assert "863" not in seen["session"] and "requests" not in seen["session"]
+    assert seen["settled"] == seen["session"] and seen["shutdown"]
+    assert seen["jobs_dir"] == os.path.join(seen["scratch_dir"], "jobs")
+    assert sorted(p.name for p in traces.iterdir()) == ["psf__requests-863.jsonl", "psf__requests-863_job-1.jsonl"]
+
+
+def test_extras_flag_is_off_by_default_and_needs_nod_extras(monkeypatch):
+    import pytest
+
+    run_nod = _load_run_nod_module()
+    monkeypatch.setattr(run_nod, "load_instances", lambda *a: [])
+    with pytest.raises(SystemExit):
+        run_nod.main(["--dry-run"])  # no instances: exits before solving, extras never imported
+    monkeypatch.setitem(__import__("sys").modules, "nod_extras.jobs", None)  # as if not installed
+    with pytest.raises(SystemExit) as exc:
+        run_nod.main(["--extras", "--dry-run"])
+    assert exc.value.code == 2
