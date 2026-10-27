@@ -38,7 +38,9 @@ Useful flags: `--instance-ids astropy__astropy-12907 django__django-11099`,
 default 1), `--provider deepinfra/fp8` (the default: the one OpenRouter provider
 every request goes to, fallbacks off, so runs stay comparable; `''` lets
 OpenRouter choose), `--reasoning-effort high` (the default; OpenRouter's
-`reasoning.effort`, `''` for the model's default). See
+`reasoning.effort`, `''` for the model's default), `--extras` (off by
+default: also give the agent nod-extras' background job tools; needs
+`nod_extras` importable, e.g. `PYTHONPATH=../nod-extras/src`). See
 `docs/swebench-generation-environment.md` for why letting nod run tests in the
 eval image is fair on SWE-bench. The images are x86; on an ARM machine Docker
 emulates them, which works but is slow. Output is a JSONL of
@@ -75,6 +77,18 @@ timing out or hitting the turn limit before producing a diff, not that the fixes
 were wrong.
 
 ## Notes / caveats
+
+- **`--extras`.** Shell jobs run in the instance's container like `run_shell`,
+  but without its 180 s limit, in a process group of their own that a kill hook
+  signals inside the container (killing the host's `docker exec` alone would
+  leave the command running). Subagents get the bench tools and environment
+  notes but no job tools. The agent runs under a neutral session id, because
+  job log paths and subagent session names are shown to the model and the
+  instance id carries the upstream PR number; traces are renamed back to the
+  instance id afterwards. When the agent replies while jobs are still running,
+  `settle_jobs` waits for them and wakes it for each report, up to the agent's
+  wake-up cap; each wake-up is a turn of up to `--max-turns`, so a run can
+  spend more than one without extras.
 
 - **Disk + time:** every instance pulls its own eval image (shared layers per
   repo/version, but still multiple GB per repo); budget disk accordingly.

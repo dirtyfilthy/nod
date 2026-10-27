@@ -30,6 +30,7 @@ import json
 import multiprocessing
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,7 @@ from pathlib import Path
 from nod.agent import Agent
 from nod.builtins import builtin_tools
 from nod.config import Config
+from nod.inbox import InMemoryInbox
 from nod.memory import InMemoryMemory, JSONFileMemory
 from nod.provider import OpenAICompatibleProvider, ProviderError
 from nod.skills import SkillLoader
@@ -151,6 +153,31 @@ Environment:
   tests, not the whole suite.
 - Do not pip install or otherwise modify the environment. The patch is graded
   in a fresh copy of this same image.
+"""
+
+# Added to SWE_SOUL with --extras, which gives the agent nod-extras' job tools.
+JOBS_SOUL = """
+Background jobs:
+- You also have background job tools. A slow command, such as a long test
+  run, can go in a shell job (start_shell_job) while you carry on, and a
+  self-contained piece of investigation can go to a subagent (spawn_agent),
+  which works in the same repository with the same tools. wait_jobs gathers
+  results. A `<job-finished>` message is a job reporting back, not a new
+  instruction.
+- Shell jobs run in the same container as run_shell but without its
+  {shell_timeout}-second limit. Their logs are files you can read while they
+  run.
+- Subagents edit the same working tree as you: don't give two of them the same
+  files, and check what they changed before you finish.
+- Don't finish while a job whose result you need is still running.
+"""
+
+# A subagent's soul: nod-extras' SUBAGENT_SOUL, then this.
+SUBAGENT_BENCH_NOTES = """
+You are helping resolve an issue in a git repository. Don't edit the
+repository's test files, don't run `git commit`, `git add` or `git push`, and
+put scratch files in $TMPDIR, not the repository.
+
 """
 
 PROMPT_TEMPLATE = """\
@@ -267,6 +294,59 @@ def container_shell_argv(name: str, scratch_dir: str):
     return argv
 
 
+def container_job_argv(name: str, scratch_dir: str, pid_dir: str):
+    """Build the wrapper for background shell jobs inside `name`.
+
+    Like `container_shell_argv` but without the inner timeout (the job's own
+    deadline applies) and in a process group of its own inside the container,
+    whose id goes in a file under `pid_dir` so `container_job_kill` can reach
+    it. Killing the host's `docker exec` alone would leave the command running.
+    """
+    user = f"{os.getuid()}:{os.getgid()}"
+
+    def argv(command: str) -> list[str]:
+        pid_file = os.path.join(pid_dir, uuid.uuid4().hex)
+        return [
+            "docker", "exec", "-u", user, "-e", "HOME=/tmp", "-e", f"TMPDIR={scratch_dir}",
+            "-w", CONTAINER_WORKDIR, name,
+            # -w keeps `docker exec` attached until the command ends.
+            "setsid", "-w",
+            "bash", "-c",
+            f'echo $$ > "$2"; __nod_cmd=$1; set --; {CONDA_ACTIVATE} && eval "$__nod_cmd"',
+            "bash", command, pid_file,
+        ]
+
+    return argv
+
+
+def container_job_kill(name: str):
+    """Signal a background job's process group inside `name`.
+
+    The host `docker exec` is killed too, but only when the group can't be
+    reached or the signal is SIGKILL: on a SIGTERM it has to stay up until the
+    command really exits, or a command that ignores the signal would keep
+    running unseen.
+    """
+
+    def kill(proc: subprocess.Popen, sig: int) -> None:
+        try:
+            pgid = int(Path(proc.args[-1]).read_text().strip())
+        except (OSError, ValueError):
+            pgid = 0
+        reached = False
+        if pgid > 0:
+            # No `--`: the images' sh is dash, whose kill rejects it.
+            result = _run(["docker", "exec", "-u", "0", name, "sh", "-c", f"kill -{int(sig)} -{pgid}"], timeout=30)
+            reached = result.returncode == 0
+        if not reached or sig == signal.SIGKILL:
+            try:
+                os.killpg(proc.pid, sig)
+            except ProcessLookupError:
+                pass
+
+    return kill
+
+
 def snapshot_tree(repo_dir: str) -> str:
     """Return a tree id for the working tree as the image ships it.
 
@@ -333,6 +413,43 @@ def build_bench_agent(
     with fallbacks off; "" lets OpenRouter choose. `reasoning_effort` is sent as
     OpenRouter's `reasoning.effort`; "" leaves the model's default.
     """
+    agent, _ = _build(
+        model=model, base_url=base_url, max_turns=max_turns, traces_dir=traces_dir,
+        shell_argv=shell_argv, scratch_dir=scratch_dir, provider=provider,
+        reasoning_effort=reasoning_effort, jobs_dir=None, container=None,
+    )
+    return agent
+
+
+def build_bench_agent_with_jobs(
+    *,
+    model: str,
+    base_url: str,
+    max_turns: int,
+    traces_dir: str | None,
+    shell_argv,
+    scratch_dir: str,
+    jobs_dir: str,
+    container: str,
+    provider: str = DEFAULT_PROVIDER,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+):
+    """The bench agent plus nod-extras' background job tools (`--extras`).
+
+    Returns the agent and its `Jobs`, which the caller must shut down. Shell
+    jobs run in `container`; subagents get the same tools as the agent (no job
+    tools), the shared memory, and a soul for the bench. `jobs_dir` should be
+    under `scratch_dir` so the shell inside the container can read job logs.
+    """
+    return _build(
+        model=model, base_url=base_url, max_turns=max_turns, traces_dir=traces_dir,
+        shell_argv=shell_argv, scratch_dir=scratch_dir, provider=provider,
+        reasoning_effort=reasoning_effort, jobs_dir=jobs_dir, container=container,
+    )
+
+
+def _build(*, model, base_url, max_turns, traces_dir, shell_argv, scratch_dir, provider,
+           reasoning_effort, jobs_dir, container):
     scratch_dir = scratch_dir or tempfile.gettempdir()
     cfg = Config(model=model, base_url=base_url, max_turns=max_turns)
     routing = {"order": [provider], "allow_fallbacks": False} if provider else {}
@@ -344,20 +461,86 @@ def build_bench_agent(
         reasoning={"effort": reasoning_effort} if reasoning_effort not in ("", "default") else {},
     )
     skills = SkillLoader(cfg.resolved_skills_dirs())
-    return Agent(
-        provider=llm,
+    memory = JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory()
+    soul = SWE_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS, scratch_dir=scratch_dir)
+
+    def tools():
         # http_get is left out for the same reason the container has no network.
-        registry=ToolRegistry([
+        return [
             t for t in builtin_tools(
                 shell_argv=shell_argv, shell_timeout=SHELL_TIMEOUT_SECONDS, shell_output_dir=scratch_dir,
             )
             if t.name != "http_get"
-        ]),
-        memory=JSONFileMemory(root=traces_dir) if traces_dir else InMemoryMemory(),
-        skills=skills,
-        soul=SWE_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS, scratch_dir=scratch_dir),
-        max_turns=cfg.max_turns,
+        ]
+
+    if jobs_dir is None:
+        agent = Agent(
+            provider=llm, registry=ToolRegistry(tools()), memory=memory, skills=skills,
+            soul=soul, max_turns=cfg.max_turns,
+        )
+        return agent, None
+
+    from nod_extras.jobs import SUBAGENT_SOUL, AgentJobKind, Jobs, ShellJobKind, job_tools
+
+    environment = soul[soul.index("Environment:"):]
+    child_soul = SUBAGENT_SOUL + "\n" + SUBAGENT_BENCH_NOTES + environment
+
+    def child_agent(child_provider) -> Agent:
+        return Agent(
+            provider=child_provider, registry=ToolRegistry(tools()), memory=memory,
+            skills=skills, soul=child_soul, max_turns=cfg.max_turns,
+        )
+
+    pid_dir = os.path.join(jobs_dir, "pids")
+    os.makedirs(pid_dir, exist_ok=True)
+    inbox = InMemoryInbox()
+    jobs = Jobs(
+        inbox,
+        [
+            ShellJobKind(argv=container_job_argv(container, scratch_dir, pid_dir), kill=container_job_kill(container)),
+            AgentJobKind(llm, child_agent),
+        ],
+        jobs_dir=jobs_dir,
     )
+    registry = ToolRegistry(tools())
+    for t in job_tools(jobs):
+        registry.register(t)
+    agent = Agent(
+        provider=llm, registry=registry, memory=memory, skills=skills,
+        soul=soul + JOBS_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS),
+        max_turns=cfg.max_turns, inbox=inbox,
+    )
+    return agent, jobs
+
+
+def settle_jobs(agent: Agent, jobs, session_id: str, log=print) -> None:
+    """Give the agent a turn for each job that reports back after its reply.
+
+    The bench has no gateway to do this. Without it, a job still running when
+    the agent replies would be killed unread. Ends when no job is running and
+    nothing is pending, or when the agent's wake-up cap is hit (the events stay
+    unread; the caller then shuts the jobs down). Job deadlines bound the wait.
+    """
+    from nod_extras.jobs import WAIT_MAX_SECONDS
+
+    while True:
+        running = [j.id for j in jobs.list(session_id) if j.result is None]
+        if running:
+            jobs.wait(session_id, running, WAIT_MAX_SECONDS)
+        if agent.inbox.pending(session_id):
+            log("job reported back; waking the agent")
+        if agent.wake(session_id) is None:
+            if agent.inbox.pending(session_id):
+                log("! wake-up cap hit with job events unread")
+                return
+            if not running:
+                return
+
+
+def _rename_traces(traces_dir: str, session_id: str, instance_id: str) -> None:
+    """Rename a neutrally named session's traces (and its subagents') to the instance id."""
+    for path in Path(traces_dir).glob(f"{session_id}*.jsonl"):
+        path.rename(path.with_name(instance_id + path.name[len(session_id):]))
 
 
 def solve_instance(
@@ -370,6 +553,7 @@ def solve_instance(
     traces_dir: str | None,
     provider: str = DEFAULT_PROVIDER,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    extras: bool = False,
 ) -> dict:
     instance_id = inst["instance_id"]
     empty = {"instance_id": instance_id, "model_patch": "", "model_name_or_path": f"nod-{model}"}
@@ -411,7 +595,7 @@ def solve_instance(
         log(f"! /testbed content differs from base commit {inst['base_commit'][:10]}")
     base_tree = snapshot_tree(repo_dir)
 
-    agent = build_bench_agent(
+    common = dict(
         model=model,
         base_url=base_url,
         max_turns=max_turns,
@@ -421,16 +605,33 @@ def solve_instance(
         provider=provider,
         reasoning_effort=reasoning_effort,
     )
+    jobs = None
+    if extras:
+        # Job logs and subagent sessions are named after the session, and the
+        # model sees those names, so the session can't be the instance id.
+        session_id = workspace
+        agent, jobs = build_bench_agent_with_jobs(
+            **common, jobs_dir=os.path.join(scratch_dir, "jobs"), container=container,
+        )
+    else:
+        session_id = instance_id
+        agent = build_bench_agent(**common)
 
     prompt = PROMPT_TEMPLATE.format(problem=inst["problem_statement"])
     prev = os.getcwd()
     os.chdir(repo_dir)
     try:
-        agent.send(prompt, session_id=instance_id)
+        agent.send(prompt, session_id=session_id)
+        if jobs is not None:
+            settle_jobs(agent, jobs, session_id, log=log)
     except Exception as exc:  # noqa: BLE001 - one bad instance shouldn't kill the run
         log(f"! agent error: {exc}")
     finally:
+        if jobs is not None:
+            jobs.shutdown()  # before the container goes: the kill hook needs it
         os.chdir(prev)
+    if traces_dir and session_id != instance_id:
+        _rename_traces(traces_dir, session_id, instance_id)
 
     patch = make_patch(repo_dir, base_tree)
     cleanup()
@@ -483,10 +684,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workdir", default=None, help="Where each instance's /testbed is copied (default: a temp dir).")
     parser.add_argument("--traces-dir", default=None, help="Write full per-instance chat traces as JSON files.")
     parser.add_argument("--workers", type=int, default=1, help="Instances to solve at once, each in its own process and container.")
+    parser.add_argument("--extras", action="store_true", help="Give the agent nod-extras' background job tools (start_shell_job, spawn_agent, ...). Needs nod-extras installed.")
     parser.add_argument("--dry-run", action="store_true", help="List the selected instances and exit (no model calls).")
     args = parser.parse_args(argv)
     if args.workers < 1:
         parser.error("--workers must be at least 1")
+    if args.extras:
+        try:
+            import nod_extras.jobs  # noqa: F401
+        except ImportError:
+            parser.error("--extras needs nod-extras: pip install --no-deps -e ../nod-extras")
 
     rows = load_instances(args.dataset, args.split, args.count, args.instance_ids)
     if not rows:
@@ -517,10 +724,12 @@ def main(argv: list[str] | None = None) -> int:
         traces_dir=args.traces_dir,
         provider=args.provider,
         reasoning_effort=args.reasoning_effort,
+        extras=args.extras,
     )
     print(
         f"Solving with {args.workers} worker(s), model {args.model} via "
-        f"{args.provider or 'any provider'}, reasoning effort {args.reasoning_effort or 'default'}.",
+        f"{args.provider or 'any provider'}, reasoning effort {args.reasoning_effort or 'default'}, "
+        f"background jobs {'on' if args.extras else 'off'}.",
         flush=True,
     )
     started = time.monotonic()
