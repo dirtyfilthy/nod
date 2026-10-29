@@ -158,15 +158,25 @@ Environment:
 # Added to SWE_SOUL with --extras, which gives the agent nod-extras' job tools.
 JOBS_SOUL = """
 Background jobs:
-- You also have background job tools. A slow command, such as a long test
-  run, can go in a shell job (start_shell_job) while you carry on, and a
-  self-contained piece of investigation can go to a subagent (spawn_agent),
-  which works in the same repository with the same tools. wait_jobs gathers
-  results. A `<job-finished>` message is a job reporting back, not a new
-  instruction.
-- Shell jobs run in the same container as run_shell but without its
-  {shell_timeout}-second limit. Their logs are files you can read while they
-  run.
+- You also have background job tools. start_shell_job runs a command in this
+  container without run_shell's {shell_timeout}-second limit, logging to a
+  file you can read while it runs. spawn_agent hands a task to a subagent: a
+  copy of you with the same tools in the same working tree, and no knowledge
+  you lack. wait_jobs collects results. A `<job-finished>` message is a job
+  reporting back, not a new instruction.
+- A job pays off only if you do something while it runs. Start the long test
+  run, then re-read your diff, check the callers of what you changed, or
+  write the reproduction, and call wait_jobs when nothing is left to do
+  without the result. If you would wait right away, run_shell is simpler.
+- Give a subagent repository work with a concrete deliverable: "run these
+  test files and report every failure with its traceback", "find every
+  caller of X under src/ and report file:line and the argument types", "try
+  approach B in a scratch copy and report whether tests T pass". Not a
+  question it can only answer from memory, and not what the upstream fix
+  looked like: it knows no more than you do.
+- Tell it what to report and how long it has. A subagent gets
+  {agent_timeout} seconds unless you pass a timeout; one that runs tests
+  needs most of that.
 - Subagents edit the same working tree as you: don't give two of them the same
   files, and check what they changed before you finish.
 - Don't finish while a job whose result you need is still running.
@@ -176,7 +186,8 @@ Background jobs:
 SUBAGENT_BENCH_NOTES = """
 You are helping resolve an issue in a git repository. Don't edit the
 repository's test files, don't run `git commit`, `git add` or `git push`, and
-put scratch files in $TMPDIR, not the repository.
+put scratch files in $TMPDIR, not the repository. Work from the code in front
+of you; don't go looking for how the issue was fixed upstream.
 
 """
 
@@ -507,7 +518,10 @@ def _build(*, model, base_url, max_turns, traces_dir, shell_argv, scratch_dir, p
         registry.register(t)
     agent = Agent(
         provider=llm, registry=registry, memory=memory, skills=skills,
-        soul=soul + JOBS_SOUL.format(shell_timeout=SHELL_TIMEOUT_SECONDS),
+        soul=soul + JOBS_SOUL.format(
+            shell_timeout=SHELL_TIMEOUT_SECONDS,
+            agent_timeout=int(jobs.kinds["agent"].default_timeout),
+        ),
         max_turns=cfg.max_turns, inbox=inbox,
     )
     return agent, jobs
