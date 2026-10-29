@@ -320,7 +320,8 @@ def test_bench_agent_with_jobs_adds_the_job_tools_and_says_so(monkeypatch, tmp_p
             assert name in agent.registry
         assert "http_get" not in agent.registry
         prompt = agent.system_prompt()
-        assert "Background jobs:" in prompt and "without its\n  180-second limit" in prompt
+        assert "Background jobs:" in prompt and "without run_shell's 180-second limit" in prompt
+        assert "A subagent gets\n  900 seconds" in prompt
         assert agent.inbox is jobs.inbox
         assert (tmp_path / "jobs" / "pids").is_dir()
 
