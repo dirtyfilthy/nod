@@ -30,6 +30,11 @@ DEFAULT_SESSION = "default"
 # job can start another job whose event wakes the agent again; without a cap
 # that cycle spends forever.
 DEFAULT_MAX_WAKEUPS = 5
+# Extra provider calls when a reply comes back with no text and no tool calls.
+# Such a reply would otherwise end the turn as if the model had finished; in
+# practice it is a provider returning nothing or a model that reasoned and then
+# said nothing, and asking again usually gets a real answer.
+EMPTY_REPLY_RETRIES = 2
 
 # The session whose turn is running on this thread. Tools that need to know
 # which session they belong to (the job tools) read it through
@@ -169,6 +174,31 @@ class Agent:
             messages = self._compact(session_id, messages)
             return self._run_turn(session_id, messages, on_token)
 
+    def _complete(
+        self, provider_messages: list[Message], on_token: OnToken | None
+    ) -> Message:
+        """One provider call, asked again up to EMPTY_REPLY_RETRIES times while
+        the reply is empty.
+
+        Empty replies are dropped rather than added to the conversation, but
+        their meta (usage and cost included) goes on the kept reply under
+        `empty_replies` so the transcript still accounts for them. If every
+        attempt is empty, the last one is returned and ends the turn as before.
+        """
+        dropped: list[dict] = []
+        while True:
+            reply = self.provider.complete(
+                provider_messages, self.registry.schemas() or None, on_token
+            )
+            if reply.tool_calls or reply.text.strip():
+                break
+            if len(dropped) == EMPTY_REPLY_RETRIES:
+                break
+            dropped.append(reply.meta)
+        if dropped:
+            reply.meta["empty_replies"] = dropped
+        return reply
+
     def _run_turn(
         self,
         session_id: str,
@@ -183,9 +213,7 @@ class Agent:
             for _ in range(self.max_turns):
                 self._deliver_events(session_id, messages)
                 provider_messages = ([sys_msg] if sys_msg is not None else []) + messages
-                reply = self.provider.complete(
-                    provider_messages, self.registry.schemas() or None, on_token
-                )
+                reply = self._complete(provider_messages, on_token)
                 messages.append(reply)
                 if not reply.tool_calls:
                     break
