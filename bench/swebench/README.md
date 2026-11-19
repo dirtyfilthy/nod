@@ -96,6 +96,8 @@ were wrong.
   `princeton-nlp/SWE-bench_Lite` copy has no `image` field, and swebench 5.x
   can't grade it.
 - **Tokens:** each instance is many model round-trips. Start with the 5-instance
-  smoke before scaling.
+  smoke before scaling. `python bench/swebench/token_usage.py RESULTS_DIR` sums
+  a run's traces into prompt, cache-hit and cost figures per task; see
+  `docs/prompt-caching.md` for what they looked like on DeepInfra.
 - **No test edits:** nod is instructed not to touch test files (the harness
   supplies its own `test_patch`); patches that modify tests can be rejected.
