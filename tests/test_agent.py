@@ -293,3 +293,49 @@ def test_send_and_wake_share_a_session_lock():
         assert t.is_alive()  # blocked on the lock we hold
     t.join(timeout=2)
     assert not t.is_alive()
+
+
+def _empty(cost: float) -> Message:
+    reply = assistant()
+    reply.meta["usage"] = {"cost": cost}
+    return reply
+
+
+def test_empty_reply_is_asked_again_and_dropped():
+    memory = InMemoryMemory()
+    provider = FakeProvider([_empty(0.1), assistant("   "), assistant("real answer")])
+    agent = Agent(provider=provider, memory=memory)
+    out = agent.send("hi", session_id="e1")
+
+    assert out == "real answer"
+    assert len(provider.calls) == 3
+    # The retries resend the same conversation; the empty replies never join it.
+    assert provider.calls[1] == provider.calls[0] == provider.calls[2]
+    stored = memory.load("e1")
+    assert [m.role for m in stored] == ["user", "assistant"]
+    # Their meta rides on the kept reply so their cost isn't lost.
+    assert stored[-1].meta["empty_replies"] == [{"usage": {"cost": 0.1}}, {}]
+
+
+def test_empty_reply_mid_turn_continues_the_tool_loop():
+    registry, seen = _registry_with_echo()
+    call = ToolCall(id="c1", name="echo", arguments={"text": "ping"})
+    provider = FakeProvider(
+        [assistant(tool_calls=[call]), assistant(), assistant("done")]
+    )
+    agent = Agent(provider=provider, registry=registry, memory=InMemoryMemory())
+    assert agent.send("go", session_id="e2") == "done"
+    assert seen == [{"text": "ping"}]
+
+
+def test_empty_replies_give_up_after_the_retries():
+    from nod.agent import EMPTY_REPLY_RETRIES
+
+    memory = InMemoryMemory()
+    provider = FakeProvider([assistant() for _ in range(EMPTY_REPLY_RETRIES + 2)])
+    agent = Agent(provider=provider, memory=memory)
+    assert agent.send("hi", session_id="e3") == ""
+    assert len(provider.calls) == EMPTY_REPLY_RETRIES + 1
+    stored = memory.load("e3")
+    assert [m.role for m in stored] == ["user", "assistant"]
+    assert len(stored[-1].meta["empty_replies"]) == EMPTY_REPLY_RETRIES
