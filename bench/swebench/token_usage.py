@@ -29,9 +29,16 @@ def usages(path: Path) -> list[dict]:
     out = []
     for line in path.read_text().splitlines():
         entry = json.loads(line)
-        usage = (entry.get("meta") or {}).get("usage") or {}
-        if entry.get("role") == "assistant" and "prompt_tokens" in usage:
-            out.append(usage)
+        if entry.get("role") != "assistant":
+            continue
+        meta = entry.get("meta") or {}
+        # Empty replies the agent asked again for are dropped from the
+        # conversation, but their calls were made first and billed.
+        for usage in [(m or {}).get("usage") or {} for m in meta.get("empty_replies") or []] + [
+            meta.get("usage") or {}
+        ]:
+            if "prompt_tokens" in usage:
+                out.append(usage)
     return out
 
 
