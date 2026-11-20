@@ -20,7 +20,13 @@ Two things keep it from running behind Nod:
   Nod produced anything meanwhile, the thought is dropped as stale and the
   subconscious looks again with Nod's new reasoning in view. That look is
   shown the dropped thought and asked whether Nod has dealt with it, so a
-  point Nod hasn't reached isn't lost just because Nod was quicker.
+  point Nod hasn't reached isn't lost just because Nod was quicker. What
+  that recheck says is delivered even if Nod has moved again: it is a step or
+  two late, but it was formed knowing what Nod did, and rechecking it again
+  only made chains of stale thoughts (17 in a row in one chat).
+- `grace` lets Nod wait a few seconds before a step for a look that is under
+  way (or about to start) on where it stands now. 0 is pure real time; a
+  large value is close to lockstep.
 
 That's the real-time mode (`start` + `watch`). Most thoughts in it lost the
 race and went stale (36 of 48 over the first runs). Lockstep mode (`attach`)
@@ -31,6 +37,7 @@ waits, at the cost of a slower Nod.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import threading
@@ -146,6 +153,8 @@ misread: <what it actually says, under 20 words>"""
 
 # Shorter quotes (like `tags": []`) can be found almost anywhere and prove nothing.
 QUOTE_MIN = 20
+# Real-time looks allowed at once: the usual one, plus one the gate may add.
+MAX_LOOKS = 2
 CONTEXT_BEFORE = 1_500
 CONTEXT_AFTER = 1_000
 
@@ -180,6 +189,8 @@ class Subconscious:
         min_gap: int = 3,
         poll_seconds: float = 0.5,
         checker: Provider | None = None,
+        grace: float = 0.0,
+        live_delay: float = 1.5,
     ) -> None:
         self.provider = provider
         # Runs the misreading check. It reasons longer than a look does
@@ -194,6 +205,13 @@ class Subconscious:
         # Messages Nod must add after a thought before the next one may come.
         self.min_gap = min_gap
         self.poll_seconds = poll_seconds
+        # Seconds Nod may wait before a step for the subconscious to catch up
+        # (real-time mode only; see `watch`).
+        self.grace = grace
+        # A reply still waiting on its tools is only looked at once it has
+        # waited this long. Quick tools finish first, and a look started on
+        # the bare reply would be stale the moment their results landed.
+        self.live_delay = live_delay
         self._seen: str | None = None
         # "async" (start + watch) or "sync" (attach); recorded in the log.
         self.mode = "async"
@@ -202,13 +220,20 @@ class Subconscious:
         # Id of the first message in the window; see WINDOW_CHARS.
         self._window_from: str | None = None
         # Nod's tool-calling replies not yet in the file, in arrival order.
-        self._live: list[Message] = []
+        self._live: list[tuple[Message, float]] = []
         self._live_lock = threading.Lock()
+        # Set to make the loop look now instead of at its next poll.
+        self._nudge = threading.Event()
+        # (seconds Nod waited, "caught up" | "timed out" | "behind") per gate.
+        self.gate_waits: list[tuple[float, str]] = []
         # Nod's provider calls: how many are running, how many have finished.
         self._inflight = 0
         self._finished = 0
         self._stop = threading.Event()
-        self._busy = threading.Event()
+        # Guards the look bookkeeping: _seen, _carry, _window_from and these.
+        self._lock = threading.RLock()
+        self._gen = 0  # number of the newest look started
+        self._active: dict[int, str] = {}  # looks in flight: number -> mark
         self._thread = threading.Thread(target=self._loop, name="subconscious", daemon=True)
 
     def start(self) -> Subconscious:
@@ -223,6 +248,7 @@ class Subconscious:
 
     def stop(self) -> None:
         self._stop.set()
+        self._nudge.set()
         if self._thread.is_alive():
             self._thread.join(timeout=5)
 
@@ -230,6 +256,52 @@ class Subconscious:
         """Wrap Nod's provider so its replies reach us before they're persisted."""
 
         return _Watched(provider, self)
+
+    def wait_at_gate(self, agent) -> None:
+        """Real time with patience: Nod waits up to `grace` seconds per step.
+
+        Hooks `_deliver_events`, which runs right before each provider call.
+        If the subconscious hasn't yet looked at where Nod stands, Nod waits
+        for it, up to `grace` seconds, so a thought that is nearly ready
+        lands in this step instead of going stale. If an older look is still
+        running, a second one starts on the current state rather than Nod
+        waiting behind it. Use with `start` + `watch`.
+        """
+
+        deliver = agent._deliver_events
+
+        def wait_then_deliver(session_id: str, messages: list[Message]) -> None:
+            # Only wait for a look at exactly where Nod stands. `messages` is
+            # the truth here; its last entry has an id unless it's the user's
+            # text at the start of a turn, which no look has seen yet.
+            here = messages[-1].id if messages else None
+            if session_id == self.session_id and self.grace > 0 and here is not None:
+                began = time.monotonic()
+                deadline = began + self.grace
+                outcome = "timed out"
+                while time.monotonic() < deadline and not self._stop.is_set():
+                    with self._lock:
+                        seen, looking = self._seen, here in self._active.values()
+                        full = len(self._active) >= MAX_LOOKS
+                    if seen == here and not looking:
+                        outcome = "caught up"
+                        break
+                    if seen != here:
+                        if full:
+                            # Every slot is on an older state; nothing can
+                            # look at this one in time.
+                            outcome = "behind"
+                            break
+                        # A fresh look at this state, alongside any older
+                        # one still running (which will come back stale).
+                        self._begin(extra=True)
+                    time.sleep(0.05)
+                self.gate_waits.append((time.monotonic() - began, outcome))
+                if os.environ.get("SUB_DEBUG"):
+                    _say(f"[gate at {len(messages)} msgs: {self.gate_waits[-1][0]:.1f}s, {outcome}]")
+            deliver(session_id, messages)
+
+        agent._deliver_events = wait_then_deliver
 
     def _calling(self) -> None:
         with self._live_lock:
@@ -241,7 +313,7 @@ class Subconscious:
             # (final answers, compaction summaries, dropped empty replies)
             # are written at once or never.
             if reply is not None and reply.tool_calls:
-                self._live.append(reply)
+                self._live.append((reply, time.monotonic()))
             self._inflight -= 1
             self._finished += 1
 
@@ -256,19 +328,21 @@ class Subconscious:
         """The transcript as it stands: the file plus replies not yet in it."""
 
         messages = self.memory.load(self.session_id)
+        now = time.monotonic()
         with self._live_lock:
             # The memory sets a message's id when it persists it.
-            self._live = [m for m in self._live if m.id is None]
-            live = list(self._live)
+            self._live = [(m, t) for m, t in self._live if m.id is None]
+            live = [m for m, t in self._live if now - t >= self.live_delay]
         return messages + live
 
     def settled(self) -> bool:
         """True once it has looked at the transcript as it stands now."""
 
-        if self._busy.is_set():
-            return False
-        messages = self._snapshot()
-        return not messages or _mark(messages) == self._seen
+        with self._lock:
+            if self._active:
+                return False
+            messages = self._snapshot()
+            return not messages or _mark(messages) == self._seen
 
     def wait_settled(self, timeout: float = 120) -> None:
         deadline = time.monotonic() + timeout
@@ -278,53 +352,128 @@ class Subconscious:
     # -- the watching loop -------------------------------------------------
 
     def _loop(self) -> None:
-        while not self._stop.wait(self.poll_seconds):
+        while True:
+            self._nudge.wait(self.poll_seconds)
+            self._nudge.clear()
+            if self._stop.is_set():
+                return
             try:
-                self._look()
+                self._begin()
             except Exception as exc:  # noqa: BLE001 - never take Nod down with us
                 _say(f"[subconscious error] {exc}")
 
-    def _look(self) -> None:
-        finished = self._finished
-        messages = self._snapshot()
-        if not messages or _mark(messages) == self._seen:
-            return
-        self._busy.set()
-        try:
+    def _begin(self, extra: bool = False) -> bool:
+        """Start a look at the transcript as it stands, if it has moved on.
+
+        One look at a time, except that the gate may ask for an `extra` one
+        on the current state while an older look is still running.
+        """
+
+        with self._lock:
+            if len(self._active) >= (MAX_LOOKS if extra else 1):
+                return False
+            finished = self._finished
+            messages = self._snapshot()
+            if not messages or _mark(messages) == self._seen:
+                return False
             mark = self._seen = _mark(messages)
             if not self._worth_a_look(messages):
-                return
+                return False
             carried, self._carry = self._carry, None
-            kind, text, quote, verdict, reply, check = self._think(messages, carried)
-            stale = False
-            if verdict == "holds":
-                self._wait_for_nod()
-                stale = self._finished != finished or _mark(self._snapshot()) != mark
-            self._log(mark, reply, kind, text, stale, carried, quote, verdict, check)
-            if kind is not None and verdict != "holds":
-                # Unsupported: not posted, and not carried either.
-                _say(f"~ (unsupported: {verdict}) {kind}: {text}")
+            window = self._window(messages)
+            self._gen += 1
+            gen = self._gen
+            self._active[gen] = mark
+        threading.Thread(
+            target=self._run_look,
+            args=(gen, mark, finished, window, carried),
+            name=f"subconscious-look-{gen}",
+            daemon=True,
+        ).start()
+        return True
+
+    def _run_look(self, gen, mark, finished, window, carried) -> None:
+        try:
+            self._look(gen, mark, finished, window, carried)
+        except Exception as exc:  # noqa: BLE001 - never take Nod down with us
+            _say(f"[subconscious error] {exc}")
+        finally:
+            with self._lock:
+                del self._active[gen]
+                if self._carry is not None and not self._active:
+                    # Nothing in flight will pick the carried thought up, so
+                    # look again even though the transcript hasn't moved.
+                    self._seen = None
+            self._nudge.set()
+
+    def _look(self, gen, mark, finished, window, carried) -> None:
+        recheck = carried is not None
+
+        def moved() -> bool:
+            return (
+                gen != self._gen  # a newer look has started
+                or self._finished != finished
+                or _mark(self._snapshot()) != mark
+            )
+
+        # A first look that Nod has already overtaken skips the evidence
+        # check: it's going to be rechecked, and that look gets checked.
+        kind, text, quote, verdict, reply, check = self._ask(
+            window, carried, skip_check=lambda: not recheck and moved()
+        )
+        stale = late = False
+        if kind is not None and verdict is None:
+            stale = True
+        elif verdict == "holds" and recheck:
+            # Delivered whatever Nod has done meanwhile; `late` records that
+            # it had moved.
+            late = moved()
+        elif verdict == "holds":
+            self._wait_for_nod()
+            stale = moved()
+        with self._lock:
+            if verdict == "holds" and not stale and self.inbox.pending(self.session_id):
+                # Two looks can overlap; the other one got its thought in
+                # first, and Nod gets one thought at a time.
+                verdict = "another thought is already waiting"
+            self._log(mark, reply, kind, text, stale, carried, quote, verdict, check, late)
+            if kind is None:
+                pass
             elif stale:
                 # Nod moved on while this formed and may already be there.
-                # Look again straight away, with what it did in view and
-                # this thought carried along to be kept or let go.
-                self._seen = None
-                self._carry = (kind, text)
+                # The next look sees what it did, with this thought carried
+                # along to be kept or let go.
+                if self._carry is None:
+                    self._carry = (kind, text)
                 _say(f"~ (stale, rechecking) {kind}: {text}")
-            elif kind is not None:
+            elif verdict != "holds":
+                # Unsupported: not posted, and not carried either.
+                _say(f"~ (unsupported: {verdict}) {kind}: {text}")
+            else:
                 self.inbox.post(
                     self.session_id, FRAMES[kind].format(text=text), wake=False
                 )
-                _say(f"~ {kind}: {text}")
-        finally:
-            self._busy.clear()
+                _say(f"~ {'(late) ' if late else ''}{kind}: {text}")
 
     def _think(
-        self, messages: list[Message], carried: tuple[str, str] | None = None
+        self, messages: list[Message]
     ) -> tuple[str | None, str, str | None, str | None, Message, Message | None]:
-        """One look: (kind, text, quote, verdict, reply, check reply)."""
+        """One look at `messages`: (kind, text, quote, verdict, reply, check reply)."""
 
-        window = self._window(messages)
+        return self._ask(self._window(messages))
+
+    def _ask(
+        self,
+        window: str,
+        carried: tuple[str, str] | None = None,
+        skip_check=lambda: False,
+    ) -> tuple[str | None, str, str | None, str | None, Message, Message | None]:
+        """Ask for a thought about `window`, then check its evidence.
+
+        The verdict is None when there is no thought, or when `skip_check`
+        said not to bother checking this one.
+        """
+
         transcript = window
         if carried is not None:
             transcript += CARRIED.format(kind=carried[0], text=carried[1])
@@ -332,7 +481,7 @@ class Subconscious:
         kind, text = parse(reply.text)
         quote = evidence(reply.text)
         verdict, check = None, None
-        if kind is not None:
+        if kind is not None and not skip_check():
             # Checked against the window only, so a carried thought can't
             # cite itself.
             verdict, check = self.check(kind, text, quote, window)
@@ -462,6 +611,7 @@ class Subconscious:
         quote: str | None,
         verdict: str | None,
         check: Message | None,
+        late: bool = False,
     ) -> None:
         record = {
             "at": at,
@@ -470,9 +620,12 @@ class Subconscious:
             "kind": kind,
             "text": text,
             "evidence": quote,
-            # "holds", or why the thought wasn't posted; None when no thought.
+            # "holds", or why the thought wasn't posted; None when there was
+            # no thought or it went stale before being checked.
             "verdict": verdict,
             "stale": stale,
+            # Posted after a recheck although Nod had moved again.
+            "late": late,
             "carried": f"{carried[0]}: {carried[1]}" if carried else None,
             "raw": reply.text,
             "usage": reply.meta.get("usage"),

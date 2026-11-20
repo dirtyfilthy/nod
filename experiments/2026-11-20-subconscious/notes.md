@@ -327,6 +327,44 @@ Caveats: one run each; the subconscious
 spoke at nearly every chance min_gap allowed (11 times in 29 steps), far from
 "silent most of the time", and cost twice Nod's share.
 
+Getting more through in real time. Two changes to the real-time mode:
+- Trust the recheck: a thought dropped as stale is rechecked once, and what
+  that recheck says is posted even if Nod has moved again (logged `late`).
+  No more chains. A first look Nod has already overtaken skips its evidence
+  check; the recheck gets checked instead.
+- Grace (`--grace N`): before each provider call Nod waits up to N seconds
+  for a look at exactly where it stands. If an older look is still running, a
+  second one starts on the current state alongside it (two at most), since
+  waiting behind an outdated look just timed out at every step (four 10s
+  waits in a row in one run). A reply still waiting on its tools is only
+  looked at after 1.5s, so quick tools don't trigger a look that's stale as
+  soon as their results land. Two overlapping looks can't both post.
+  `SUB_DEBUG=1` prints each gate; the run prints a grace summary.
+
+Models (8 demo moments each, one pass, via OpenRouter): Claude Haiku 5.5 looks
+take ~3s against DeepSeek V4.1 Flash's ~5s with the same catches and clean
+format; reasoning off is 3-4x faster but DeepSeek turns chatty and Haiku
+nearly mute; GPT-6 Luna and Qwen 3.8 Omni Flash are no faster; MiMo, Ling and
+Hy4 Flash are slower or ignore the format. Haiku costs ~2x per look here and
+gets no prompt caching through our provider.
+
+Hurried demo, two runs each on the final engine (h-*):
+
+| | thoughts | stale | on time | late | reached Nod mid-turn | Nod waited |
+|---|---|---|---|---|---|---|
+| DeepSeek, no grace | 3 | 2 | 0 | 1 | 1 | - |
+| DeepSeek, grace 10 | 3 | 3 | 0 | 0 | 0 | 22-32s a run, 3 of 9 gates timed out |
+| Haiku, grace 8 | 5 | 0 | 4 | 0 | 4 | 16-21s a run (~2.8s a step), 13 of 13 gates caught up |
+
+- What decides it is whether look + evidence check fit inside the grace.
+  Haiku: ~3s + ~3s. DeepSeek: ~5-9s look, then a check that reasons for
+  1.2k-4k tokens (10-40s), so a thought never lands on time even at grace 10;
+  only its quick "nothing" looks do.
+- Earlier g-* runs (before the second look slot) are in runs/ too; g-g10-1
+  includes a 4.5 minute gap that I couldn't explain and that didn't recur.
+- Next for real time: a fast evidence check (the logged thoughts and verdicts
+  are a ready test set for trying the check on Haiku or without reasoning).
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks

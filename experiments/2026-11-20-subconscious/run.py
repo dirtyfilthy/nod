@@ -8,6 +8,8 @@
   run.py --sub-model M       a different model for the subconscious
   run.py --sync              lockstep: it looks before each of Nod's steps
                              and Nod waits, instead of racing it in real time
+  run.py --grace 3           real time, but Nod waits up to 3s before a step
+                             for a look that's under way
 
 Thoughts print to stderr in dim magenta as they happen; show.py replays a session.
 """
@@ -57,13 +59,22 @@ def main() -> int:
     p.add_argument("--sub-model", help="model for the subconscious (default: Nod's)")
     p.add_argument("--min-gap", type=int, default=3)
     p.add_argument("--sync", action="store_true", help="look before each step, Nod waiting")
+    p.add_argument(
+        "--grace", type=float, default=0.0,
+        help="real time: seconds Nod may wait before a step for a look under way",
+    )
     p.add_argument("--session", default=time.strftime("s-%Y%m%d-%H%M%S"))
     args = p.parse_args()
 
     cfg = lab.config(HERE)
     agent = lab.agent(cfg)
     sid = args.session
-    mode = " (no subconscious)" if args.off else " (lockstep)" if args.sync else ""
+    mode = (
+        " (no subconscious)" if args.off
+        else " (lockstep)" if args.sync
+        else f" (real time, grace {args.grace:g}s)" if args.grace
+        else ""
+    )
     print(f"[session {sid}{mode}]", file=sys.stderr)
 
     task = args.task
@@ -99,12 +110,14 @@ def main() -> int:
             session_id=sid,
             log_path=HERE / "runs" / "thoughts" / f"{sid}.jsonl",
             min_gap=args.min_gap,
+            grace=args.grace,
         )
         if args.sync:
             sub.attach(agent)
         else:
             sub.start()
             agent.provider = sub.watch(agent.provider)
+            sub.wait_at_gate(agent)
 
     try:
         if task is None:
@@ -122,6 +135,14 @@ def main() -> int:
                 sub.look_now(sub.memory.load(sid))
             else:
                 sub.wait_settled()
+            if sub.gate_waits:
+                waits = sub.gate_waits
+                print(
+                    f"[grace: Nod waited {sum(w for w, _ in waits):.0f}s over {len(waits)} steps; "
+                    + ", ".join(f"{o} {sum(1 for _, x in waits if x == o)}" for o in ("caught up", "timed out", "behind"))
+                    + "]",
+                    file=sys.stderr,
+                )
             for event in agent.inbox.pending(sid):
                 print(f"[held for the next turn] {event.text}", file=sys.stderr)
         return 0
