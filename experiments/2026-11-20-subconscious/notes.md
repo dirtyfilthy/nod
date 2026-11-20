@@ -144,6 +144,31 @@ runaways wrote 9-18k chars).
   (39% -> 74% of prompt tokens cached, 92k -> 63k prompt tokens). The cap
   didn't trigger in that run.
 
+Positive valence. Every thought so far was a correction: 40 doubts, 6 ideas,
+0 recalls. Nothing ever told Nod it had enough, or what was worth chasing. Two
+kinds added: `curious` ("Something here catches your interest: ...") for
+something Nod has seen that matters more than what it's chasing, and
+`settled` ("A quiet, settled feeling: ...") for when the evidence it has
+already answers the question but it keeps gathering or is about to re-check
+something verified. `settled` needs the same evidence bar as a doubt, never
+cheering; doing fine means silence. The soul note mentions both.
+
+Replay, old prompt vs new on the same transcript points ($0.016):
+- The stalled "vibe" turn (10 points): the old prompt already wanted to say
+  "you've got enough" but had to call it doubt/idea ("You've gathered plenty
+  for a vibe"). The new one said `settled` 3 times, each citing the numbers it
+  had (50k src, 31k tests...), plus one `curious` about doc figures drifting
+  (F8: 301k/s vs 735k/s). Once it still put "you already have enough" under
+  doubt.
+- The wildcard run: `curious: your biggest workspace's #1 lead may be wildcard
+  noise — that's a sharper vibe answer...`, which is what Nod led with.
+- demo-1 (Nod fine): no positive thoughts, no cheering; one extra pointless
+  doubt (discount/tax order commutes) where the old prompt said nothing, one
+  sample each so possibly noise.
+- Both prompts reproduced the same misreads ("on branch dirtyfilthy...",
+  "178 tasks queued"), so those are an evidence problem, not a prompt-kind one.
+- Not yet seen live: how Nod reacts to a settled or curious thought.
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks

@@ -42,6 +42,11 @@ FRAMES = {
     "doubt": "*A flicker of uncertainty: {text}*",
     "idea": "*An idea surfaces, unbidden: {text}*",
     "recall": "*Something tugs at your memory: {text}*",
+    # The two that pull forward rather than back. Without them every thought
+    # was a correction (40 doubts, 6 ideas, 0 recalls over the first runs), and
+    # nothing ever told Nod it had enough or what was worth chasing.
+    "curious": "*Something here catches your interest: {text}*",
+    "settled": "*A quiet, settled feeling: {text}*",
 }
 
 # Added to Nod's soul so it doesn't mistake a thought for the user talking.
@@ -49,7 +54,8 @@ SOUL_NOTE = """\
 ## Intuition
 
 Now and then a thought surfaces in you while you work: a flicker of
-uncertainty, an idea that just came to you, something tugging at your memory.
+uncertainty, an idea that just came to you, something tugging at your memory,
+a pull of interest, a settled sense that you have what you need.
 It arrives in italics. It's yours, not the user's, so don't answer it or
 mention it. Treat it like any hunch: often worth a look, sometimes wrong.
 One can also come to you between messages and surface just before the user's
@@ -61,13 +67,24 @@ conversation with the user, the tools it calls and what they return, and its \
 private reasoning. Nod can't hear you directly. What you say surfaces in its \
 mind as a passing feeling or a thought that just came to it.
 
-Stay silent most of the time. Speak only when you notice something Nod seems \
-to be missing that would change what it does next, for example:
+Stay silent most of the time. Speak only when you notice something that \
+would change what Nod does next. It can pull Nod back:
 - an assumption it hasn't checked, or a claim the evidence doesn't support
 - something in a tool result it skimmed past
 - going round in circles, or digging deeper into an approach that isn't working
 - something the user asked for that it has lost track of
 - a simpler or more direct path
+
+Or it can pull Nod forward:
+- curious: something in what Nod has already seen is more interesting or \
+important than what it's chasing, and it hasn't noticed
+- settled: the evidence Nod already has answers the question, but it keeps \
+gathering, or it's about to re-check or hedge on something it has actually \
+verified
+
+A settled thought needs the same evidence as a doubt: point at what in the \
+transcript already shows it. Never use it to cheer, agree or reassure; if Nod \
+is simply doing fine, say nothing.
 
 How to speak:
 - One thought, under 25 words, addressed to Nod as "you" or as a bare question.
@@ -79,7 +96,9 @@ Reply with exactly one line, one of:
 nothing
 doubt: <thought>
 idea: <thought>
-recall: <thought>"""
+recall: <thought>
+curious: <thought>
+settled: <thought>"""
 
 # Added to the transcript on the look after a thought was dropped as stale.
 CARRIED = """
