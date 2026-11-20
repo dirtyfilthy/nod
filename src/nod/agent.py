@@ -20,10 +20,10 @@ from contextvars import ContextVar
 from nod.compaction import CompactionConfig, compact_if_needed
 from nod.inbox import Inbox, InMemoryInbox
 from nod.memory import Memory
-from nod.messages import Message, system, tool_result, user
+from nod.messages import Message, ToolCall, system, tool_result, user
 from nod.provider import OnToken, Provider
 from nod.skills import SkillLoader
-from nod.tools import ToolRegistry
+from nod.tools import ALWAYS_ACCEPT, PreToolHook, ToolRegistry
 
 DEFAULT_SESSION = "default"
 # How many wake-ups may run back to back without the user saying anything. A
@@ -59,8 +59,12 @@ class Agent:
         compaction: CompactionConfig | None = None,
         inbox: Inbox | None = None,
         max_wakeups: int = DEFAULT_MAX_WAKEUPS,
+        pre_tool_hook: PreToolHook = ALWAYS_ACCEPT,
     ) -> None:
         self.provider = provider
+        # Asked before every tool call; see `nod.tools.PreToolHook`. Public so
+        # wiring outside core (nod-extras) can replace it after construction.
+        self.pre_tool_hook = pre_tool_hook
         self.registry = registry or ToolRegistry()
         self.skills = skills
         self.soul = soul.strip()
@@ -199,6 +203,17 @@ class Agent:
             reply.meta["empty_replies"] = dropped
         return reply
 
+    def _run_tool(self, call: ToolCall) -> str:
+        """Ask the pre-tool hook, then dispatch the call unless it refused."""
+
+        try:
+            refusal = self.pre_tool_hook(call)
+        except Exception as exc:  # noqa: BLE001 - fail closed, tell the model
+            return f"error: the pre-tool check failed, so '{call.name}' did not run: {exc}"
+        if refusal is not None:
+            return refusal
+        return self.registry.dispatch(call)
+
     def _run_turn(
         self,
         session_id: str,
@@ -218,8 +233,7 @@ class Agent:
                 if not reply.tool_calls:
                     break
                 for call in reply.tool_calls:
-                    result = self.registry.dispatch(call)
-                    messages.append(tool_result(call.id, result))
+                    messages.append(tool_result(call.id, self._run_tool(call)))
                 self.memory.persist_messages(session_id, messages)
                 messages = self._compact(session_id, messages)
             else:
