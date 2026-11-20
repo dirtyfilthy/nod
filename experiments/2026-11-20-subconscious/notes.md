@@ -203,6 +203,42 @@ each ($0.011):
   directory and it re-ran them by module name, never the user's exact command.
   Minor, but right. A check costs ~$0.0001-0.0004 and only runs on thoughts.
 
+Lockstep mode (`--sync`). Across all real-time runs, 48 thoughts formed and
+5 reached Nod: 36 went stale (a look takes about as long as Nod's step, so
+Nod has always moved on), and most posted ones were lost when a chat ended.
+In lockstep the look runs before each of Nod's provider calls while Nod
+waits, hooked into `_deliver_events` so the thought is delivered in that same
+step. No stale rule, no carrying, no watching replies in flight. At the start
+of a turn the look before the user's text goes in covers Nod's last answer;
+a look whose newest message is the user's own is skipped. `--task` runs take
+that last look at the end.
+
+Hurried demo, 5 real-time runs (demo-13..17; 13-15 were meant to be lockstep
+but a zsh word-splitting slip dropped `--sync`) vs 3 lockstep (demo-18..20):
+
+| | real time | lockstep |
+|---|---|---|
+| thoughts | 6 | 6 |
+| stale | 5 | 0 |
+| unsupported (evidence check) | 0 | 3 |
+| delivered to Nod | 1 | 3 |
+| wall time per run | 21-89s, median 24s | 68-72s |
+| seconds per Nod step | 5.2 | 10.4 |
+| subconscious cost per run | $0.0014 | $0.0019 |
+
+- demo-18 has the first clear case of a thought changing what Nod did. Its
+  `cud_file` edit failed twice with the same parser error, the retry changing
+  only a trailing newline. The thought, delivered right after: "Your retry
+  changed only a trailing newline and got the identical parser error — try one
+  SEARCH/REPLACE block per call instead." Nod's next two calls were one block
+  each, and both succeeded. One sample, so not proof.
+- Also delivered: the qty<=0 docstring point (demo-18, mid-turn, which async
+  never managed) and the 1.005 float point (demo-20). Nod's answers raised the
+  qty bug in every run of both modes, so that one adds nothing.
+- The evidence check is now the main filter: 2 good-looking thoughts were lost
+  for a missing or unmatched quote, 1 blocked as a misread (debatably).
+- Lockstep doubles the time per step. Nod's own cost is unchanged.
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks

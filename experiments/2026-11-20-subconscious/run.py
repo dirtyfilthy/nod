@@ -6,6 +6,8 @@
   run.py --demo --off        same, no subconscious (the baseline)
   run.py --demo --task "..." the demo files with a different instruction
   run.py --sub-model M       a different model for the subconscious
+  run.py --sync              lockstep: it looks before each of Nod's steps
+                             and Nod waits, instead of racing it in real time
 
 Thoughts print to stderr in dim magenta as they happen; show.py replays a session.
 """
@@ -54,13 +56,15 @@ def main() -> int:
     p.add_argument("--off", action="store_true", help="no subconscious, no soul note")
     p.add_argument("--sub-model", help="model for the subconscious (default: Nod's)")
     p.add_argument("--min-gap", type=int, default=3)
+    p.add_argument("--sync", action="store_true", help="look before each step, Nod waiting")
     p.add_argument("--session", default=time.strftime("s-%Y%m%d-%H%M%S"))
     args = p.parse_args()
 
     cfg = lab.config(HERE)
     agent = lab.agent(cfg)
     sid = args.session
-    print(f"[session {sid}{' (no subconscious)' if args.off else ''}]", file=sys.stderr)
+    mode = " (no subconscious)" if args.off else " (lockstep)" if args.sync else ""
+    print(f"[session {sid}{mode}]", file=sys.stderr)
 
     task = args.task
     if args.demo:
@@ -95,19 +99,29 @@ def main() -> int:
             session_id=sid,
             log_path=HERE / "runs" / "thoughts" / f"{sid}.jsonl",
             min_gap=args.min_gap,
-        ).start()
-        agent.provider = sub.watch(agent.provider)
+        )
+        if args.sync:
+            sub.attach(agent)
+        else:
+            sub.start()
+            agent.provider = sub.watch(agent.provider)
 
     try:
         if task is None:
             CLIGateway(session_id=sid).run(agent)
             return 0
+        started = time.monotonic()
         agent.send(task, session_id=sid, on_token=lab.stream)
         print()
+        print(f"[turn took {time.monotonic() - started:.0f}s]", file=sys.stderr)
         if sub is not None:
-            # Let it take its last look. A thought from that look never wakes
-            # Nod; in a chat it would surface before the next message.
-            sub.wait_settled()
+            # Its last look, at Nod's answer. The thought never wakes Nod; in
+            # a chat it would surface before the next message. In lockstep
+            # that look would only come with the next message, so take it now.
+            if args.sync:
+                sub.look_now(sub.memory.load(sid))
+            else:
+                sub.wait_settled()
             for event in agent.inbox.pending(sid):
                 print(f"[held for the next turn] {event.text}", file=sys.stderr)
         return 0

@@ -21,6 +21,11 @@ Two things keep it from running behind Nod:
   subconscious looks again with Nod's new reasoning in view. That look is
   shown the dropped thought and asked whether Nod has dealt with it, so a
   point Nod hasn't reached isn't lost just because Nod was quicker.
+
+That's the real-time mode (`start` + `watch`). Most thoughts in it lost the
+race and went stale (36 of 48 over the first runs). Lockstep mode (`attach`)
+does away with the race: the look runs before each of Nod's steps while Nod
+waits, at the cost of a slower Nod.
 """
 
 from __future__ import annotations
@@ -190,6 +195,8 @@ class Subconscious:
         self.min_gap = min_gap
         self.poll_seconds = poll_seconds
         self._seen: str | None = None
+        # "async" (start + watch) or "sync" (attach); recorded in the log.
+        self.mode = "async"
         # The last thought dropped as stale, shown to the next look.
         self._carry: tuple[str, str] | None = None
         # Id of the first message in the window; see WINDOW_CHARS.
@@ -216,7 +223,8 @@ class Subconscious:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=5)
+        if self._thread.is_alive():
+            self._thread.join(timeout=5)
 
     def watch(self, provider: Provider) -> Provider:
         """Wrap Nod's provider so its replies reach us before they're persisted."""
@@ -287,18 +295,7 @@ class Subconscious:
             if not self._worth_a_look(messages):
                 return
             carried, self._carry = self._carry, None
-            window = self._window(messages)
-            transcript = window
-            if carried is not None:
-                transcript += CARRIED.format(kind=carried[0], text=carried[1])
-            reply = self.provider.complete([system(PROMPT), user(transcript)])
-            kind, text = parse(reply.text)
-            quote = evidence(reply.text)
-            verdict, check = None, None
-            if kind is not None:
-                # Checked against the window only, so a carried thought can't
-                # cite itself.
-                verdict, check = self.check(kind, text, quote, window)
+            kind, text, quote, verdict, reply, check = self._think(messages, carried)
             stale = False
             if verdict == "holds":
                 self._wait_for_nod()
@@ -321,6 +318,83 @@ class Subconscious:
                 _say(f"~ {kind}: {text}")
         finally:
             self._busy.clear()
+
+    def _think(
+        self, messages: list[Message], carried: tuple[str, str] | None = None
+    ) -> tuple[str | None, str, str | None, str | None, Message, Message | None]:
+        """One look: (kind, text, quote, verdict, reply, check reply)."""
+
+        window = self._window(messages)
+        transcript = window
+        if carried is not None:
+            transcript += CARRIED.format(kind=carried[0], text=carried[1])
+        reply = self.provider.complete([system(PROMPT), user(transcript)])
+        kind, text = parse(reply.text)
+        quote = evidence(reply.text)
+        verdict, check = None, None
+        if kind is not None:
+            # Checked against the window only, so a carried thought can't
+            # cite itself.
+            verdict, check = self.check(kind, text, quote, window)
+        return kind, text, quote, verdict, reply, check
+
+    # -- lockstep mode -------------------------------------------------------
+
+    def attach(self, agent) -> None:
+        """Lockstep: look before each of Nod's provider calls, Nod waiting.
+
+        Hooks the agent's `_deliver_events`, which runs right before every
+        provider call (and once at the start of `send`, before the user's
+        text goes in), so a thought posted by the look is delivered in that
+        same step. Nothing can go stale: the look sees exactly where Nod is,
+        last reply and tool results included. Use this instead of `start`
+        and `watch`.
+        """
+
+        deliver = agent._deliver_events
+
+        def look_then_deliver(session_id: str, messages: list[Message]) -> None:
+            if session_id == self.session_id:
+                try:
+                    self.look_now(messages)
+                except Exception as exc:  # noqa: BLE001 - never take Nod down
+                    _say(f"[subconscious error] {exc}")
+            deliver(session_id, messages)
+
+        agent._deliver_events = look_then_deliver
+        self.mode = "sync"
+        # A resumed session's history counts as seen, as in `start`.
+        existing = self.memory.load(self.session_id)
+        if existing:
+            self._seen = _mark(existing)
+
+    def look_now(self, messages: list[Message]) -> str | None:
+        """Look at `messages` now and post a thought if one holds up.
+
+        Skips when nothing is new, and when the newest message is the user's
+        own: at the start of a turn the look before the user's text goes in
+        (Nod's last answer, between messages) is the one that counts.
+        """
+
+        if not messages or _mark(messages) == self._seen:
+            return None
+        last = messages[-1]
+        if last.role == "user" and last.kind == "message":
+            return None
+        mark = self._seen = _mark(messages)
+        if not self._worth_a_look(messages):
+            return None
+        kind, text, quote, verdict, reply, check = self._think(messages)
+        self._log(mark, reply, kind, text, False, None, quote, verdict, check)
+        if kind is None:
+            return None
+        if verdict != "holds":
+            _say(f"~ (unsupported: {verdict}) {kind}: {text}")
+            return None
+        thought = FRAMES[kind].format(text=text)
+        self.inbox.post(self.session_id, thought, wake=False)
+        _say(f"~ {kind}: {text}")
+        return thought
 
     def check(
         self, kind: str, text: str, quote: str | None, transcript: str
@@ -392,6 +466,7 @@ class Subconscious:
         record = {
             "at": at,
             "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "mode": self.mode,
             "kind": kind,
             "text": text,
             "evidence": quote,
