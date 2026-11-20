@@ -28,6 +28,25 @@ from nod.gateway import CLIGateway  # noqa: E402
 from nod.provider import OpenAICompatibleProvider  # noqa: E402
 
 
+class CappedProvider(OpenAICompatibleProvider):
+    """The subconscious's brain, with a cap on how much it may write.
+
+    Its answer is one line, but twice it wrote 9-18k chars of invented
+    transcript instead. Normal looks use under 800 completion tokens
+    (reasoning included, max seen 992 of reasoning), so 1500 stops a runaway
+    without touching a real answer. A capped reply parses as nothing.
+    """
+
+    def __init__(self, *args, max_tokens: int = 1500, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.max_tokens = max_tokens
+
+    def _payload(self, messages, tools):
+        payload = super()._payload(messages, tools)
+        payload["max_tokens"] = self.max_tokens
+        return payload
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--task")
@@ -56,7 +75,7 @@ def main() -> int:
         agent.soul = f"{agent.soul}\n\n{SOUL_NOTE}"
         model = args.sub_model or cfg.model
         sub = Subconscious(
-            provider=OpenAICompatibleProvider(
+            provider=CappedProvider(
                 model=model,
                 base_url=cfg.base_url,
                 # The pinned routing only makes sense for Nod's own model.

@@ -90,7 +90,11 @@ Just before Nod's latest step you were about to think:
 If what Nod has done since already deals with that, let it go. If not, it \
 still stands: say it again, reworded if that helps."""
 
-# Budget for the transcript the subconscious sees, in characters, newest kept.
+# Budget for the transcript the subconscious sees, in characters. When it's
+# exceeded the start jumps forward to leave about half the budget, then stays
+# put while the transcript grows again. A start that moved on every look (the
+# newest N chars) changed the prompt's prefix each time and defeated the
+# provider's prefix cache: on a long session ~2% of each look was cached.
 WINDOW_CHARS = 40_000
 RESULT_CHARS = 2_000
 REASONING_CHARS = 1_500
@@ -121,6 +125,8 @@ class Subconscious:
         self._seen: str | None = None
         # The last thought dropped as stale, shown to the next look.
         self._carry: tuple[str, str] | None = None
+        # Id of the first message in the window; see WINDOW_CHARS.
+        self._window_from: str | None = None
         # Nod's tool-calling replies not yet in the file, in arrival order.
         self._live: list[Message] = []
         self._live_lock = threading.Lock()
@@ -214,7 +220,7 @@ class Subconscious:
             if not self._worth_a_look(messages):
                 return
             carried, self._carry = self._carry, None
-            transcript = render(messages)
+            transcript = self._window(messages)
             if carried is not None:
                 transcript += CARRIED.format(kind=carried[0], text=carried[1])
             reply = self.provider.complete([system(PROMPT), user(transcript)])
@@ -238,6 +244,25 @@ class Subconscious:
                 _say(f"~ {kind}: {text}")
         finally:
             self._busy.clear()
+
+    def _window(self, messages: list[Message]) -> str:
+        """The transcript from a start that only moves when it has to."""
+
+        ids = [m.id for m in messages]
+        # Live replies have no id yet, so None must never match one.
+        known = self._window_from is not None and self._window_from in ids
+        start = ids.index(self._window_from) if known else 0
+        blocks = render_blocks(messages[start:])
+        size = sum(len(b) + 2 for b in blocks)
+        if size > WINDOW_CHARS:
+            while size > WINDOW_CHARS // 2 and len(blocks) > 1:
+                size -= len(blocks.pop(0)) + 2
+                start += 1
+            # Messages from the file all have ids; only a live reply at the
+            # end can lack one, and then the next look starts over from 0.
+            self._window_from = messages[start].id
+        text = "\n\n".join(b for b in blocks if b)
+        return f"{CUT}\n\n{text}" if start else text
 
     def _worth_a_look(self, messages: list[Message]) -> bool:
         if self.inbox.pending(self.session_id):
@@ -318,33 +343,41 @@ def parse(raw: str) -> tuple[str | None, str]:
     return None, ""
 
 
-def render(messages: list[Message]) -> str:
-    """The transcript as the subconscious reads it, newest kept within the window."""
+CUT = "[...earlier transcript cut...]"
 
-    lines: list[str] = []
-    for m in messages:
-        if m.kind == "compaction_summary":
-            lines.append(f"EARLIER WORK (summary):\n{m.content}")
-        elif is_thought(m):
-            lines.append(f"THOUGHT (yours): {m.content.strip('*')}")
-        elif m.kind == "event":
-            lines.append(f"EVENT: {m.content}")
-        elif m.role == "user":
-            lines.append(f"USER: {m.content}")
-        elif m.role == "assistant":
-            if m.reasoning:
-                lines.append(f"NOD (thinking): {_clip(m.reasoning, REASONING_CHARS)}")
-            if m.content:
-                lines.append(f"NOD: {m.content}")
-            for call in m.tool_calls:
-                args = json.dumps(call.arguments, ensure_ascii=False)
-                lines.append(f"NOD calls {call.name}({_clip(args, RESULT_CHARS)})")
-        elif m.role == "tool":
-            lines.append(f"RESULT: {_clip(m.content, RESULT_CHARS)}")
-    text = "\n\n".join(lines)
-    if len(text) > WINDOW_CHARS:
-        text = "[...earlier transcript cut...]\n\n" + text[-WINDOW_CHARS:]
-    return text
+
+def render(messages: list[Message]) -> str:
+    """The whole transcript as the subconscious reads it."""
+
+    return "\n\n".join(b for b in render_blocks(messages) if b)
+
+
+def render_blocks(messages: list[Message]) -> list[str]:
+    """Exactly one block per message, "" for one that shows nothing."""
+
+    return [_render_one(m) for m in messages]
+
+
+def _render_one(m: Message) -> str:
+    if m.kind == "compaction_summary":
+        return f"EARLIER WORK (summary):\n{m.content}"
+    if is_thought(m):
+        return f"THOUGHT (yours): {m.content.strip('*')}"
+    if m.kind == "event":
+        return f"EVENT: {m.content}"
+    if m.role == "user":
+        return f"USER: {m.content}"
+    if m.role == "tool":
+        return f"RESULT: {_clip(m.content, RESULT_CHARS)}"
+    parts: list[str] = []
+    if m.reasoning:
+        parts.append(f"NOD (thinking): {_clip(m.reasoning, REASONING_CHARS)}")
+    if m.content:
+        parts.append(f"NOD: {m.content}")
+    for call in m.tool_calls:
+        args = json.dumps(call.arguments, ensure_ascii=False)
+        parts.append(f"NOD calls {call.name}({_clip(args, RESULT_CHARS)})")
+    return "\n\n".join(parts)
 
 
 def _clip(s: str, n: int) -> str:

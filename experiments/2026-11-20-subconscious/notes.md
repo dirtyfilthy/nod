@@ -120,6 +120,30 @@ correctly (Nod had covered the float point).
   anything. It now counts the existing history as seen at startup and waits
   for new activity. (Also seen: the old chat on the same session was still
   running in another tab; two processes on one session both write to it.)
+- s-20261120-190143, third ratbag pass ("vibe check"): Nod ran ratbag itself
+  this time (9 commands, unprompted by any thought) and found that the top
+  pinterest lead is a wildcard DNS record under www.shffls.com that ratbag
+  doesn't tag. All 6 thoughts during the reply went stale; the rechecks kept
+  one chain alive, and the thought finally kept ("178 items still queued") is
+  a misreading: 178 is the next waiting job's priority score. Rechecking can
+  preserve a bad point as well as a good one. The subconscious cost ~3.5x
+  Nod's share of that reply.
+
+Cutting cost. Across all runs the subconscious's prompts were 37% cached, and
+on the long ratbag session about 2% (~11.5k uncached tokens a look), because
+the window was "the newest 40k chars", so its start moved every look and the
+provider's prefix cache never matched. Now the window's start only jumps when
+the transcript outgrows 40k chars, and then to leave about half, so the prefix
+stays put between jumps. Rendering is one block per message so the window cuts
+on message boundaries. The subconscious's provider also sends `max_tokens`
+1500 (normal looks use under 800 completion tokens, reasoning included; two
+runaways wrote 9-18k chars).
+- Replaying the ratbag transcript: consecutive looks shared 0% of their
+  prompt before, 94% after; the average prompt fell from 40k to 27k chars.
+- Live, the same 8 looks over that transcript: $0.0067 before, $0.0025 after
+  (39% -> 74% of prompt tokens cached, 92k -> 63k prompt tokens). The cap
+  didn't trigger in that run.
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks
