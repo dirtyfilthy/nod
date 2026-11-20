@@ -7,4 +7,6 @@ model = "deepseek/deepseek-v4.1-flash-1017"
 # same deployment the bench and the live config use.
 provider_routing = { order = ["deepinfra/fp8"], allow_fallbacks = false }
 
-max_turns = 20
+# Tool rounds per reply. Nod's default of 20 ran out mid-way through a
+# whole-repo review; experiments get more room.
+max_turns = 50
