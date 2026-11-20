@@ -365,13 +365,37 @@ Hurried demo, two runs each on the final engine (h-*):
 - Next for real time: a fast evidence check (the logged thoughts and verdicts
   are a ready test set for trying the check on Haiku or without reasoning).
 
-- Open question: is the stale rule now too strict? On short tasks Nod always
-  moves before a thought is ready, so the subconscious can only speak during
-  slow tool calls or after the final answer. Worth checking on longer tasks
-  whether dropped thoughts were ever things Nod didn't get to on its own.
+- The stale rule was too strict, as suspected after the chat runs: on short
+  tasks Nod always moved first. Lockstep and the grace period above are the
+  answers to it.
+- s-20261120-223338 (Haiku, grace 8, chat): asked for a "five check" (a typo
+  for vibe check), Nod went looking for a five-part check in ratbag's docs,
+  and the subconscious encouraged it ("docs/32 numbers its lenses ... if there
+  are five"). It follows Nod's reading of the user; it didn't question it.
 
-**Verdict:** the plumbing works and it's cheap. The demo is too easy to tell
-whether it helps; it needs tasks where Nod actually goes wrong without it.
-Next: try it on SWE-bench instances Nod fails (docs/NOD_FAILURES.md), long chat
-sessions where an early requirement gets lost, a stronger `--sub-model`, and
-check whether thoughts ever lead Nod astray.
+**Verdict (2026-11-21):** as first conceived, a second agent watching in real
+time and slipping in hunches, it doesn't work well. Interesting to play with,
+not something to build on as is.
+
+- Real time loses the race. A look takes about as long as one of Nod's steps,
+  so 36 of the first 48 thoughts went stale, and the few that arrived told Nod
+  things it already knew. It only works with a faster subconscious and Nod
+  waiting for it (Haiku, grace 8: 4 of 5 on time), which is lockstep by
+  another name.
+- Lockstep is the version that did something: it broke Nod out of a repeated
+  edit error, got it to run ratbag's lab instead of quoting a stale doc, and
+  two of the three ratbag bugs confirmed by hand came from its thoughts. But
+  that is a reviewer taking a turn before each step, not a subconscious, and
+  it cost ~5.7x the money and 4x the time. The run with no subconscious found
+  a good point lockstep missed, and with one run per arm the gain can't be
+  separated from Nod simply doing twice the work.
+- It needs a lot of machinery to be safe to listen to: an evidence quote and a
+  misreading check (two misreads reached Nod before that), no waking Nod, a
+  soul note, a cap on runaway output. Each fixed a real failure.
+- What held up and might be reused: the framing (Nod took italic thoughts as
+  its own and never mentioned them), the evidence check as a cheap filter for
+  any second-opinion channel, the cache-friendly window (about 60% cheaper on
+  long sessions), and `InMemoryInbox.post(wake=False)`.
+- If picked up again: run each arm several times on tasks Nod fails
+  (docs/NOD_FAILURES.md), with a no-subconscious arm told to be thorough to
+  control for effort, and try a fast evidence check.
