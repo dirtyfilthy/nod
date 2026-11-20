@@ -6,6 +6,16 @@ recent part to its own model and asks for either nothing or one short thought.
 A thought goes into Nod's inbox, phrased as something Nod feels or that just
 came to it, so the loop delivers it before Nod's next provider call (or wakes
 Nod if it's idle and a gateway is listening).
+
+Two things keep it from running behind Nod:
+- The file alone lags: Nod's reply is only persisted once its tool calls
+  finish. `watch` wraps Nod's provider so each reply that calls tools is seen
+  the moment it arrives, reasoning included.
+- Thinking takes about as long as Nod's own step, so Nod is often reasoning
+  about the same thing in parallel. A finished thought waits for any call Nod
+  has in flight (it couldn't be delivered before Nod's next call anyway); if
+  Nod produced anything meanwhile, the thought is dropped as stale and the
+  subconscious looks again with Nod's new reasoning in view.
 """
 
 from __future__ import annotations
@@ -80,7 +90,7 @@ class Subconscious:
         session_id: str,
         log_path: str | Path,
         min_gap: int = 3,
-        poll_seconds: float = 1.0,
+        poll_seconds: float = 0.5,
     ) -> None:
         self.provider = provider
         # A reader of its own: sharing the agent's JSONFileMemory would reset
@@ -93,6 +103,12 @@ class Subconscious:
         self.min_gap = min_gap
         self.poll_seconds = poll_seconds
         self._seen: str | None = None
+        # Nod's tool-calling replies not yet in the file, in arrival order.
+        self._live: list[Message] = []
+        self._live_lock = threading.Lock()
+        # Nod's provider calls: how many are running, how many have finished.
+        self._inflight = 0
+        self._finished = 0
         self._stop = threading.Event()
         self._busy = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="subconscious", daemon=True)
@@ -105,13 +121,49 @@ class Subconscious:
         self._stop.set()
         self._thread.join(timeout=5)
 
+    def watch(self, provider: Provider) -> Provider:
+        """Wrap Nod's provider so its replies reach us before they're persisted."""
+
+        return _Watched(provider, self)
+
+    def _calling(self) -> None:
+        with self._live_lock:
+            self._inflight += 1
+
+    def _heard(self, reply: Message | None) -> None:
+        with self._live_lock:
+            # Only replies that call tools wait to be persisted; the rest
+            # (final answers, compaction summaries, dropped empty replies)
+            # are written at once or never.
+            if reply is not None and reply.tool_calls:
+                self._live.append(reply)
+            self._inflight -= 1
+            self._finished += 1
+
+    def _wait_for_nod(self) -> None:
+        while not self._stop.is_set():
+            with self._live_lock:
+                if not self._inflight:
+                    return
+            time.sleep(0.1)
+
+    def _snapshot(self) -> list[Message]:
+        """The transcript as it stands: the file plus replies not yet in it."""
+
+        messages = self.memory.load(self.session_id)
+        with self._live_lock:
+            # The memory sets a message's id when it persists it.
+            self._live = [m for m in self._live if m.id is None]
+            live = list(self._live)
+        return messages + live
+
     def settled(self) -> bool:
         """True once it has looked at the transcript as it stands now."""
 
         if self._busy.is_set():
             return False
-        messages = self.memory.load(self.session_id)
-        return not messages or messages[-1].id == self._seen
+        messages = self._snapshot()
+        return not messages or _mark(messages) == self._seen
 
     def wait_settled(self, timeout: float = 120) -> None:
         deadline = time.monotonic() + timeout
@@ -128,20 +180,30 @@ class Subconscious:
                 _say(f"[subconscious error] {exc}")
 
     def _look(self) -> None:
-        messages = self.memory.load(self.session_id)
-        if not messages or messages[-1].id == self._seen:
+        finished = self._finished
+        messages = self._snapshot()
+        if not messages or _mark(messages) == self._seen:
             return
         self._busy.set()
         try:
-            self._seen = messages[-1].id
+            mark = self._seen = _mark(messages)
             if not self._worth_a_look(messages):
                 return
             reply = self.provider.complete(
                 [system(PROMPT), user(render(messages))]
             )
             kind, text = parse(reply.text)
-            self._log(messages[-1].id, reply, kind, text)
+            stale = False
             if kind is not None:
+                self._wait_for_nod()
+                stale = self._finished != finished or _mark(self._snapshot()) != mark
+            self._log(mark, reply, kind, text, stale)
+            if stale:
+                # Nod moved on while this formed and may already be there.
+                # Look again straight away, with what it did in view.
+                self._seen = None
+                _say(f"~ (dropped, stale) {kind}: {text}")
+            elif kind is not None:
                 self.inbox.post(self.session_id, FRAMES[kind].format(text=text))
                 _say(f"~ {kind}: {text}")
         finally:
@@ -157,18 +219,47 @@ class Subconscious:
             since += 1
         return True
 
-    def _log(self, at: str | None, reply: Message, kind: str | None, text: str) -> None:
+    def _log(
+        self, at: str, reply: Message, kind: str | None, text: str, stale: bool
+    ) -> None:
         record = {
             "at": at,
             "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "kind": kind,
             "text": text,
+            "stale": stale,
             "raw": reply.text,
             "usage": reply.meta.get("usage"),
         }
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
+
+
+class _Watched:
+    """Nod's provider, passing each reply to the subconscious on the way out."""
+
+    def __init__(self, inner: Provider, sub: Subconscious) -> None:
+        self.inner = inner
+        self.sub = sub
+
+    def complete(self, messages, tools=None, on_token=None) -> Message:
+        self.sub._calling()
+        reply = None
+        try:
+            reply = self.inner.complete(messages, tools, on_token)
+            return reply
+        finally:
+            self.sub._heard(reply)
+
+
+def _mark(messages: list[Message]) -> str:
+    """Identifies where the transcript has got to."""
+
+    last = messages[-1]
+    # A live reply has no id yet. Once persisted its tool results follow it,
+    # so the mark changes again then, which is what we want.
+    return last.id or f"live:{id(last)}"
 
 
 def is_thought(m: Message) -> bool:

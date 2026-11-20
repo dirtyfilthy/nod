@@ -69,6 +69,7 @@ def main() -> int:
             log_path=HERE / "runs" / "thoughts" / f"{sid}.jsonl",
             min_gap=args.min_gap,
         ).start()
+        agent.provider = sub.watch(agent.provider)
 
     try:
         if task is None:

@@ -31,9 +31,41 @@ Replay: `uv run python show.py [session]`.
 - demo-2, "quick one-line fix, I'm in a hurry": second look gave
   `doubt: the docstring promises lines with quantity ≤ 0 are ignored...`. Nod
   fixed the rounding and flagged the quantity bug ("Separately, the docstring
-  says..."), not quoting or answering the thought. The framing works.
+  says..."), not quoting or answering the thought. But the thought was
+  redundant: Nod's own reasoning had already noted the docstring bug one step
+  before the thought arrived, and its reasoning after the thought doesn't
+  mention it. The subconscious formed it after entry 6 (the file reads) and
+  never saw that reasoning, because an assistant message is only persisted
+  together with its tool results, so the subconscious runs a round behind.
 - demo-3, demo-4, same hurried prompt with `--off`: both flagged the quantity
   bug unprompted. So demo-2 shows the mechanism, not a benefit.
+
+Fixing the lag. Timestamps from demo-2 showed two causes: the file only gets
+Nod's reply once its tool calls finish, and, the bigger one, the subconscious
+thinks about as long as Nod does, so the two reason about the same view in
+parallel. Now `Subconscious.watch` wraps Nod's provider so tool-calling
+replies are visible the moment they arrive, and a finished thought waits for
+any call Nod has in flight. If Nod produced anything meanwhile, the thought is
+dropped (`stale` in the log) and the subconscious looks again at once with the
+new reasoning in view. Waiting costs no delivery time, since a thought only
+reaches Nod at its next call anyway.
+
+- demo-5 (only the first half of the fix, stale-dropping on the file view):
+  a thought got through ("you'll need Decimal(str(x))"), but Nod's in-flight
+  reasoning was already there; it answered "Right —". That's what led to
+  waiting on in-flight calls.
+- demo-6, demo-7, demo-8 (full fix): each had one thought dropped as stale
+  (the same `Decimal(str(...))` / float-subtotal points Nod reached on its
+  own), and the relook said `nothing`. The fix does its job.
+- demo-8 also: after Nod's final answer the subconscious said "they asked for
+  a one-line fix in a hurry and got ... an essay — trim the lecture". That woke
+  Nod. Its reasoning first read the thought as the user ("The user is reacting
+  — or rather, the italic thought is my own intuition"), and its reply began
+  "Fair hit. Leading with the fix:", as if answering a complaint. A thought
+  after the final answer turns into a visible message to the user, so the
+  inner voice leaks. Options: don't wake on thoughts, hold them until the
+  user's next message, or tell Nod a woken turn may just be a second look.
+- demo-9: never spoke.
 
 **Verdict:** the plumbing works and it's cheap. The demo is too easy to tell
 whether it helps; it needs tasks where Nod actually goes wrong without it.
