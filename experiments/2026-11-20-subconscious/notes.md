@@ -239,6 +239,40 @@ but a zsh word-splitting slip dropped `--sync`) vs 3 lockstep (demo-18..20):
   for a missing or unmatched quote, 1 blocked as a misread (debatably).
 - Lockstep doubles the time per step. Nod's own cost is unchanged.
 
+ratbag-sync-1: "check out ~/src/mine/ratbag and give me your take", lockstep,
+nod-extras on (s-20261120-204417 before it hit OpenRouter's 402 out-of-credits;
+Nod's own calls send no max_tokens, so OpenRouter reserves the model maximum).
+29 Nod steps, 477s, Nod $0.0089, subconscious $0.0182. 16 thoughts formed, 11
+delivered, 5 blocked by the evidence check (one rightly: "every commit cites
+a Q-number" from one commit; three were the same "just read docs/31" nudge).
+The first run where the subconscious clearly shaped the result:
+- "The 1567 passing tests leave out the Docker lab suite" and later "a passive
+  profile with 0 findings exercises none of the drain loop" led Nod to say
+  "Fair — offline/passive exercises nothing. The meaningful test is against
+  the Docker lab", check Docker and run ./lab/run.sh: 65 findings, T3 98% by
+  40% of wall clock. Earlier sessions repeated docs/31's stale "T3 fails".
+- "docs/31's gap list is pinned to 5dfe27b; HEAD is 06f463d" and "you wrote
+  86% coverage claimed but the run you just finished says 91%" -> the answer
+  reports 91% and calls docs/31 stale.
+- "You've drifted ... into commit-authorship stats" -> "Right. Let me stop the
+  forensics and actually try the thing."
+- "Your 3-of-68 logging ratio came from a two-line grep" -> "Fair. Let me
+  actually check what those handlers do"; the answer's point is more careful.
+- The subconscious spotted a doc/code mismatch while Nod read engine.py:
+  `failed_agents` documented as exact, but `_process_item` finishes FAILED
+  without `sink.fail()` (engine.py:908 vs :88, checked by hand). Nod verified
+  it and reported it.
+- On the `test` signal on every lab host, it said "you haven't checked the
+  trigger", then "name_hints already strips the scope root, so it likely comes
+  from the renderer calling notable_tokens directly". Nod confirmed it and
+  made it its lead finding: report/worklist.py:128 calls
+  notable_tokens(host.canonical) without roots (checked by hand).
+- Nod took every thought as its own ("Fair.", "Right.") and never mentioned
+  them to the user.
+Caveats: one run, no lockstep-off control on this prompt; the subconscious
+spoke at nearly every chance min_gap allowed (11 times in 29 steps), far from
+"silent most of the time", and cost twice Nod's share.
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks
