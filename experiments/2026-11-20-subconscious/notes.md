@@ -269,7 +269,34 @@ The first run where the subconscious clearly shaped the result:
   notable_tokens(host.canonical) without roots (checked by hand).
 - Nod took every thought as its own ("Fair.", "Right.") and never mentioned
   them to the user.
-Caveats: one run, no lockstep-off control on this prompt; the subconscious
+Control, ratbag-off-1: same prompt, `--off` (no subconscious, no soul note),
+nod-extras on.
+
+| | no subconscious | lockstep |
+|---|---|---|
+| Nod steps / tool calls | 13 / 22 | 29 / 45 |
+| wall time | 120s | 477s |
+| cost (Nod + subconscious) | $0.0047 | $0.0089 + $0.0182 |
+| ran ratbag on anything | no (`--help`, `modules --check`) | lab end to end, CLI on workspaces |
+| `test` signal display bug | no | yes (lead finding) |
+| `failed_agents` doc/code mismatch | no | yes |
+| provider failures look like "no data" | no | yes |
+| two worklists, report vs TUI (348 vs 2071 lines) | yes (its top refactor) | no |
+| 91% coverage, gates green | yes | yes |
+| T3 / fitness | quotes docs/31, says the fix is only shown on a lab "you built to pass" and asks for a real-scope replay | ran the lab, 98%, "numbers to back the central claim" |
+
+- Lockstep found two verified bugs the baseline didn't, and actually ran the
+  tool. Its two bug findings both came from thoughts.
+- The baseline made a good point lockstep missed (duplicate worklists), and
+  was more careful about T3: the lab is synthetic, which docs/31 already
+  says, so lockstep's "numbers back the central claim" overstates what
+  running it showed.
+- Confound: lockstep made Nod do over twice the work (29 vs 13 steps). Some
+  of the gain may be effort rather than insight; a baseline told to be
+  thorough, or with the same step budget, would separate the two.
+- Cost: about 5.7x the money and 4x the time.
+
+Caveats: one run each; the subconscious
 spoke at nearly every chance min_gap allowed (11 times in 29 steps), far from
 "silent most of the time", and cost twice Nod's share.
 
