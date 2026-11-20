@@ -9,3 +9,6 @@ dist/
 # Local config and secrets stay out of the repo.
 config.toml
 .env
+
+# Experiment state (sessions, job logs, outputs).
+experiments/*/runs/
