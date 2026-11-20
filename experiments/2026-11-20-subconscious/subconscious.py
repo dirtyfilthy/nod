@@ -18,7 +18,9 @@ Two things keep it from running behind Nod:
   about the same thing in parallel. A finished thought waits for any call Nod
   has in flight (it couldn't be delivered before Nod's next call anyway); if
   Nod produced anything meanwhile, the thought is dropped as stale and the
-  subconscious looks again with Nod's new reasoning in view.
+  subconscious looks again with Nod's new reasoning in view. That look is
+  shown the dropped thought and asked whether Nod has dealt with it, so a
+  point Nod hasn't reached isn't lost just because Nod was quicker.
 """
 
 from __future__ import annotations
@@ -79,6 +81,15 @@ doubt: <thought>
 idea: <thought>
 recall: <thought>"""
 
+# Added to the transcript on the look after a thought was dropped as stale.
+CARRIED = """
+
+---
+Just before Nod's latest step you were about to think:
+{kind}: {text}
+If what Nod has done since already deals with that, let it go. If not, it \
+still stands: say it again, reworded if that helps."""
+
 # Budget for the transcript the subconscious sees, in characters, newest kept.
 WINDOW_CHARS = 40_000
 RESULT_CHARS = 2_000
@@ -108,6 +119,8 @@ class Subconscious:
         self.min_gap = min_gap
         self.poll_seconds = poll_seconds
         self._seen: str | None = None
+        # The last thought dropped as stale, shown to the next look.
+        self._carry: tuple[str, str] | None = None
         # Nod's tool-calling replies not yet in the file, in arrival order.
         self._live: list[Message] = []
         self._live_lock = threading.Lock()
@@ -194,20 +207,24 @@ class Subconscious:
             mark = self._seen = _mark(messages)
             if not self._worth_a_look(messages):
                 return
-            reply = self.provider.complete(
-                [system(PROMPT), user(render(messages))]
-            )
+            carried, self._carry = self._carry, None
+            transcript = render(messages)
+            if carried is not None:
+                transcript += CARRIED.format(kind=carried[0], text=carried[1])
+            reply = self.provider.complete([system(PROMPT), user(transcript)])
             kind, text = parse(reply.text)
             stale = False
             if kind is not None:
                 self._wait_for_nod()
                 stale = self._finished != finished or _mark(self._snapshot()) != mark
-            self._log(mark, reply, kind, text, stale)
+            self._log(mark, reply, kind, text, stale, carried)
             if stale:
                 # Nod moved on while this formed and may already be there.
-                # Look again straight away, with what it did in view.
+                # Look again straight away, with what it did in view and
+                # this thought carried along to be kept or let go.
                 self._seen = None
-                _say(f"~ (dropped, stale) {kind}: {text}")
+                self._carry = (kind, text)
+                _say(f"~ (stale, rechecking) {kind}: {text}")
             elif kind is not None:
                 self.inbox.post(
                     self.session_id, FRAMES[kind].format(text=text), wake=False
@@ -227,7 +244,13 @@ class Subconscious:
         return True
 
     def _log(
-        self, at: str, reply: Message, kind: str | None, text: str, stale: bool
+        self,
+        at: str,
+        reply: Message,
+        kind: str | None,
+        text: str,
+        stale: bool,
+        carried: tuple[str, str] | None,
     ) -> None:
         record = {
             "at": at,
@@ -235,6 +258,7 @@ class Subconscious:
             "kind": kind,
             "text": text,
             "stale": stale,
+            "carried": f"{carried[0]}: {carried[1]}" if carried else None,
             "raw": reply.text,
             "usage": reply.meta.get("usage"),
         }

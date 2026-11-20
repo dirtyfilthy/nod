@@ -97,6 +97,23 @@ right before the next user message.
   first on the path and refuses to run if nod was imported from elsewhere.
 - Twice now (demo-9, ratbag) the subconscious answered with ~9-18k chars of
   invented transcript instead of one line. Parsed as nothing, but costly.
+- s-20261120-190143 (ratbag again, resumed with max_turns 50): Nod reused
+  what it had gathered and answered in 2 tool rounds. Its product verdict
+  ("hasn't proven it finds anything") came from docs/31 in a tree 91 commits
+  old; it never ran ratbag. The subconscious said exactly that ("you never
+  ran ratbag yourself, so 'finds nothing' is still secondhand"), but Nod's
+  answer landed first, the thought was dropped as stale, and the relook came
+  up with a weaker one instead. The stale rule lost a point Nod hadn't dealt
+  with.
+
+Carrying dropped thoughts. A thought dropped as stale is now shown to the very
+next look ("just before Nod's latest step you were about to think: ... if
+what Nod has done since deals with it, let it go; if not, say it again").
+The log records it under `carried`; the terminal shows `(stale, rechecking)`.
+Offline: kept and held when Nod's answer ignores the point, let go when it
+covers it. demo-10, demo-11: each dropped thought was carried and let go,
+correctly (Nod had covered the float point).
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks
