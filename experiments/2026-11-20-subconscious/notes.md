@@ -296,6 +296,33 @@ nod-extras on.
   thorough, or with the same step budget, would separate the two.
 - Cost: about 5.7x the money and 4x the time.
 
+Third arm, ratbag-async-1: same prompt, real-time mode.
+
+| | off | real time | lockstep |
+|---|---|---|---|
+| Nod steps | 13 | 17 | 29 |
+| wall time | 120s | 163s | 477s |
+| cost (Nod + sub) | $0.0047 | $0.0065 + $0.0055 | $0.0089 + $0.0182 |
+| thoughts formed / delivered | - | 7 / 2 | 16 / 11 |
+| stale / unsupported | - | 3 / 2 | 0 / 5 |
+| ran ratbag on anything | no | no | yes (lab, workspaces) |
+| headline finding | duplicate worklists | docs-drift guard broken | `test` signal display bug |
+
+- Real time's headline is real (checked by hand): `_register_max_q()` in
+  report/docs.py takes the first `Q1–Q<n>` in docs/11, which is the status
+  line saying Q1–Q110, while the file has 130 headings up to Q132, and
+  `ratbag docs check` says "up to date". Nod found it itself; the related
+  thought ("the register's status line says Q1–Q110 but commits cite Q132")
+  went stale and never reached it.
+- Its 2 delivered thoughts: "docs/31 is pinned to 5dfe27b, HEAD is 6fcefae"
+  (the answer then says docs/31 is 181 commits stale) and "130 headings but
+  max Q132, so the fix must handle gaps", which Nod had already worked out
+  ("That's what I already computed") but put in the answer.
+- Each arm found a different headline bug, all real. Run-to-run variance is
+  large, so with one run per arm the differences between them can't be pinned
+  on the subconscious. What lockstep did that neither other arm did: it ran
+  the tool, and two of its findings trace directly to thoughts.
+
 Caveats: one run each; the subconscious
 spoke at nearly every chance min_gap allowed (11 times in 29 steps), far from
 "silent most of the time", and cost twice Nod's share.
