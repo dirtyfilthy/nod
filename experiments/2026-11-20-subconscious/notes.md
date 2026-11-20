@@ -114,6 +114,12 @@ Offline: kept and held when Nod's answer ignores the point, let go when it
 covers it. demo-10, demo-11: each dropped thought was carried and let go,
 correctly (Nod had covered the float point).
 
+- Resuming s-20261120-190143 in a new process: its subconscious started with
+  nothing marked as seen, so 8s after startup it looked at the old transcript
+  and posted a thought about Nod's previous answer before the user had said
+  anything. It now counts the existing history as seen at startup and waits
+  for new activity. (Also seen: the old chat on the same session was still
+  running in another tab; two processes on one session both write to it.)
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks

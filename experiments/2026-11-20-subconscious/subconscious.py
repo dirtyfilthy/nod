@@ -132,6 +132,12 @@ class Subconscious:
         self._thread = threading.Thread(target=self._loop, name="subconscious", daemon=True)
 
     def start(self) -> Subconscious:
+        # A resumed session already has history. Count it as seen, so the
+        # first look waits for something new instead of commenting on the
+        # last exchange before the user has said anything.
+        messages = self._snapshot()
+        if messages:
+            self._seen = _mark(messages)
         self._thread.start()
         return self
 
