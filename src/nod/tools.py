@@ -55,6 +55,20 @@ def tool(
     return wrap
 
 
+# Called by the agent loop before each tool call runs. Return None to let the
+# call run, or a string the model reads as the call's result instead (a
+# refusal and its reason). The hook runs inside the turn, so
+# `nod.agent.current_session()` names the session. A hook that raises stops
+# the call: the loop fails closed.
+PreToolHook = Callable[[ToolCall], "str | None"]
+
+
+def ALWAYS_ACCEPT(call: ToolCall) -> str | None:
+    """The default pre-tool hook: every call runs. nod-extras can swap in a gate."""
+
+    return None
+
+
 class ToolRegistry:
     """Holds the tools available this run and routes calls to them."""
 

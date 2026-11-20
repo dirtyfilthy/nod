@@ -22,7 +22,7 @@ from nod.inbox import InMemoryInbox
 from nod.memory import JSONFileMemory
 from nod.provider import OpenAICompatibleProvider, ProviderError
 from nod.skills import SkillLoader
-from nod.tools import ToolRegistry
+from nod.tools import ALWAYS_ACCEPT, ToolRegistry
 
 
 def build_agent(cfg: Config) -> Agent:
@@ -54,7 +54,9 @@ def build_agent(cfg: Config) -> Agent:
         def child_agent(child_provider) -> Agent:
             # A subagent gets the parent's brain, store and skills, a
             # task-focused soul, the plain tools and no job tools: no nesting,
-            # so a parent's spend is bounded by its own limits.
+            # so a parent's spend is bounded by its own limits. It takes the
+            # parent's pre-tool hook as it stands when the child starts, so a
+            # gate swapped in after build_agent covers subagents too.
             return Agent(
                 provider=child_provider,
                 registry=ToolRegistry(builtin_tools()),
@@ -63,6 +65,7 @@ def build_agent(cfg: Config) -> Agent:
                 soul=SUBAGENT_SOUL,
                 max_turns=cfg.max_turns,
                 compaction=compaction,
+                pre_tool_hook=agent.pre_tool_hook,
             )
 
         jobs = Jobs(
@@ -73,7 +76,9 @@ def build_agent(cfg: Config) -> Agent:
         for t in job_tools(jobs):
             registry.register(t)
 
-    return Agent(
+    # Every tool call passes `pre_tool_hook` first. Core accepts everything;
+    # to gate calls, set `agent.pre_tool_hook` (nod-extras does the judging).
+    agent = Agent(
         provider=provider,
         registry=registry,
         memory=memory,
@@ -82,7 +87,9 @@ def build_agent(cfg: Config) -> Agent:
         max_turns=cfg.max_turns,
         compaction=compaction,
         inbox=inbox,
+        pre_tool_hook=ALWAYS_ACCEPT,
     )
+    return agent
 
 
 def main(argv: list[str] | None = None) -> int:
