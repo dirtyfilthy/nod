@@ -11,6 +11,7 @@ experiments/
   lab.py          shared helpers: a Config and an Agent with per-experiment state
   base.toml       model / routing defaults for every experiment (no secrets)
   env.sh          `source` it to put OPENROUTER_API_KEY in your shell (via sops)
+  with-key.sh     or prefix one command with it: ./experiments/with-key.sh uv run ...
   new.sh          `./experiments/new.sh some-idea` -> experiments/2026-11-20-some-idea/
   _template/      what new.sh copies
   <date>-<name>/
