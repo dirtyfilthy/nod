@@ -83,6 +83,20 @@ right before the next user message.
   were things Nod went on to say itself (chat-1: "no test covers that
   quantity≤0 clause"; Nod's answer: "none of them covering the documented
   `qty <= 0` behavior"). The held-after-final-answer path never came up live.
+- s-20261120-185110 and s-20261120-185410 (your chats, the second a review of
+  ~/src/mine/ratbag): run with `--with-editable nod-extras`, which loaded the
+  main checkout's nod, so every thought that passed the stale check crashed on
+  `post(wake=False)`. Two were lost: "you didn't actually check — that's a
+  claim dressed as a status report" and, the first real catch, "your own
+  function-length output listed four over 200 lines (849, 439, 409, 288) —
+  the answer says one" (true; Nod's answer said "one over 200" and then cited
+  `create_app` at 849 lines). Four ratbag thoughts were dropped as stale; three
+  about `.env`/`src/scratch` being tracked were rightly dropped (Nod had run
+  `git ls-files`/`git check-ignore`), one about citing a superseded T3 result
+  may have been a fair correction. lab.py now puts this checkout's `src/`
+  first on the path and refuses to run if nod was imported from elsewhere.
+- Twice now (demo-9, ratbag) the subconscious answered with ~9-18k chars of
+  invented transcript instead of one line. Parsed as nothing, but costly.
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks
