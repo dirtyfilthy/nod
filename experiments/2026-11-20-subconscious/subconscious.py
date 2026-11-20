@@ -26,6 +26,7 @@ Two things keep it from running behind Nod:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import threading
 import time
@@ -92,13 +93,56 @@ How to speak:
 - Don't repeat a thought you've already had; they appear in the transcript as THOUGHT.
 - Don't tell Nod what it already knows or is already doing.
 
-Reply with exactly one line, one of:
+Every thought needs evidence: copy the exact words from the transcript that \
+it rests on, character for character, under 200 characters. Read that line \
+again before you rely on it: what is the number, what is it counting, whose \
+output is it? If you can't point at the words, say nothing.
+
+Reply with either the single word:
 nothing
+or two lines, the first one of
 doubt: <thought>
 idea: <thought>
 recall: <thought>
 curious: <thought>
-settled: <thought>"""
+settled: <thought>
+and the second
+evidence: <exact words copied from the transcript>"""
+
+# The second look a thought gets before it reaches Nod, from the same model
+# but shown only the quote and what surrounds it. Its one job is misreadings,
+# which slipped through twice ("On branch dirtyfilthy/..." when the output said
+# main; a priority score of 178 read as 178 queued tasks).
+CHECK = """\
+Someone watching an AI agent's work wrote a hunch about it and quoted the \
+transcript as evidence. Below is the hunch, the quote, and the part of the \
+transcript around the quote.
+
+Your only job is to catch misreadings of the quoted words: a number taken \
+for the wrong quantity, a line read as saying something it doesn't, a label \
+or column mistaken for another, words from one place taken as being about \
+another. The hunch may also draw on parts of the transcript you can't see \
+here, and may claim things this context can't show (such as what the agent \
+hasn't done yet); those are not yours to judge, so let them pass. Say \
+misread only when the quoted words, read in this context, don't say what the \
+hunch takes them to say.
+
+Hunch ({kind}): {text}
+
+Quote: {quote}
+
+Context:
+{context}
+
+Reply with exactly one line: either
+holds
+or
+misread: <what it actually says, under 20 words>"""
+
+# Shorter quotes (like `tags": []`) can be found almost anywhere and prove nothing.
+QUOTE_MIN = 20
+CONTEXT_BEFORE = 1_500
+CONTEXT_AFTER = 1_000
 
 # Added to the transcript on the look after a thought was dropped as stale.
 CARRIED = """
@@ -130,8 +174,12 @@ class Subconscious:
         log_path: str | Path,
         min_gap: int = 3,
         poll_seconds: float = 0.5,
+        checker: Provider | None = None,
     ) -> None:
         self.provider = provider
+        # Runs the misreading check. It reasons longer than a look does
+        # (~1.2-1.4k tokens), so it may need a bigger output cap.
+        self.checker = checker or provider
         # A reader of its own: sharing the agent's JSONFileMemory would reset
         # the ids it tracks as persisted and make it write duplicates.
         self.memory = JSONFileMemory(memory_dir)
@@ -239,17 +287,27 @@ class Subconscious:
             if not self._worth_a_look(messages):
                 return
             carried, self._carry = self._carry, None
-            transcript = self._window(messages)
+            window = self._window(messages)
+            transcript = window
             if carried is not None:
                 transcript += CARRIED.format(kind=carried[0], text=carried[1])
             reply = self.provider.complete([system(PROMPT), user(transcript)])
             kind, text = parse(reply.text)
-            stale = False
+            quote = evidence(reply.text)
+            verdict, check = None, None
             if kind is not None:
+                # Checked against the window only, so a carried thought can't
+                # cite itself.
+                verdict, check = self.check(kind, text, quote, window)
+            stale = False
+            if verdict == "holds":
                 self._wait_for_nod()
                 stale = self._finished != finished or _mark(self._snapshot()) != mark
-            self._log(mark, reply, kind, text, stale, carried)
-            if stale:
+            self._log(mark, reply, kind, text, stale, carried, quote, verdict, check)
+            if kind is not None and verdict != "holds":
+                # Unsupported: not posted, and not carried either.
+                _say(f"~ (unsupported: {verdict}) {kind}: {text}")
+            elif stale:
                 # Nod moved on while this formed and may already be there.
                 # Look again straight away, with what it did in view and
                 # this thought carried along to be kept or let go.
@@ -263,6 +321,32 @@ class Subconscious:
                 _say(f"~ {kind}: {text}")
         finally:
             self._busy.clear()
+
+    def check(
+        self, kind: str, text: str, quote: str | None, transcript: str
+    ) -> tuple[str, Message | None]:
+        """Whether a thought's evidence holds: "holds", or why not.
+
+        The quote must really be in the transcript (whitespace aside), and a
+        second look at it in context must not find a misreading.
+        """
+
+        if not quote:
+            return "no evidence quoted", None
+        if len(" ".join(quote.replace("…", " ").replace("...", " ").split())) < QUOTE_MIN:
+            return "quote too short to show anything", None
+        found = locate(quote, transcript)
+        if found is None:
+            return "quote not in the transcript", None
+        flat, start, end = found
+        context = flat[max(0, start - CONTEXT_BEFORE) : end + CONTEXT_AFTER]
+        reply = self.checker.complete(
+            [user(CHECK.format(kind=kind, text=text, quote=quote, context=context))]
+        )
+        line = next((s.strip() for s in reply.text.splitlines() if s.strip()), "")
+        if line.lower().startswith("holds"):
+            return "holds", reply
+        return line or "no verdict from the check", reply
 
     def _window(self, messages: list[Message]) -> str:
         """The transcript from a start that only moves when it has to."""
@@ -301,16 +385,23 @@ class Subconscious:
         text: str,
         stale: bool,
         carried: tuple[str, str] | None,
+        quote: str | None,
+        verdict: str | None,
+        check: Message | None,
     ) -> None:
         record = {
             "at": at,
             "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "kind": kind,
             "text": text,
+            "evidence": quote,
+            # "holds", or why the thought wasn't posted; None when no thought.
+            "verdict": verdict,
             "stale": stale,
             "carried": f"{carried[0]}: {carried[1]}" if carried else None,
             "raw": reply.text,
             "usage": reply.meta.get("usage"),
+            "check_usage": check.meta.get("usage") if check else None,
         }
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as f:
@@ -360,6 +451,37 @@ def parse(raw: str) -> tuple[str | None, str]:
             return kind, rest.strip()
         return None, ""
     return None, ""
+
+
+def evidence(raw: str) -> str | None:
+    """The quote from an `evidence:` line, without wrapping quote marks."""
+
+    for line in raw.splitlines():
+        head, _, rest = line.strip().strip("`").partition(":")
+        if head.strip().lower() == "evidence" and rest.strip():
+            return rest.strip().strip("`\"'“”‘’").strip() or None
+    return None
+
+
+def locate(quote: str, transcript: str) -> tuple[str, int, int] | None:
+    """Find the quote in the transcript with whitespace collapsed.
+
+    Returns the collapsed transcript and the quote's span in it. A quote that
+    elides with "..." must have every piece present, in order.
+    """
+
+    flat = " ".join(transcript.split())
+    pieces = [" ".join(p.split()) for p in re.split(r"\.\.\.|…", quote)]
+    pieces = [p for p in pieces if p]
+    if not pieces:
+        return None
+    start = end = flat.find(pieces[0])
+    for piece in pieces:
+        at = flat.find(piece, end)
+        if at < 0:
+            return None
+        end = at + len(piece)
+    return flat, start, end
 
 
 CUT = "[...earlier transcript cut...]"

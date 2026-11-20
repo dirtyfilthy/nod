@@ -169,6 +169,40 @@ Replay, old prompt vs new on the same transcript points ($0.016):
   "178 tasks queued"), so those are an evidence problem, not a prompt-kind one.
 - Not yet seen live: how Nod reacts to a settled or curious thought.
 
+Citing evidence. Two thoughts that reached Nod were misreadings ("On branch
+dirtyfilthy/..." when the output said main; a priority score of 178 read as
+178 queued tasks). Now every thought must come with an `evidence:` line that
+copies the transcript, and before it can reach Nod:
+1. the quote must be at least 20 chars and really be in the window the look
+   saw (whitespace collapsed; "..." elisions must match piece by piece);
+2. a second look, shown only the hunch, the quote and ~2.5k chars around it,
+   must answer `holds`, not `misread: ...`. It's told to judge only whether
+   the quoted words say what the hunch takes them to say.
+A blocked thought isn't posted or carried; the log records `evidence`,
+`verdict` and `check_usage`, the terminal shows `(unsupported: why)`.
+
+The check reasons ~1.2-1.4k tokens and came back empty under the look's 1500
+cap (6 of 11 thoughts "no verdict" on the first replay), so it runs on its own
+provider capped at 4000. An 8-char minimum let `tags": []` count as evidence;
+raised to 20.
+
+Replay at the moments behind the two misreads and four good catches, 3 tries
+each ($0.011):
+- The branch misread came back once and was blocked: "misread: It's the tail
+  of a merge commit message ("from dirtyfilthy/..."), not the current branch."
+  The 178 misread didn't recur in 3 tries, so that one isn't tested.
+- Good thoughts mostly passed (float rounding x2, Docker lab tests skipped,
+  T3 superseded, "you already have 50k src lines... for a vibe").
+- Losses: the check wrongly called the T3 point a misread once (passed it on
+  another try); twice a good thought came without a quote and was dropped,
+  one of them the qty<=0 docstring bug.
+- One empty verdict still, out of 10 checks.
+- demo-12 live: one thought posted, "You blamed the 0-test run on the cd ...
+  `python -m unittest` still hasn't been re-run clean", evidence "Ran 0 tests
+  in 0.000s". True: Nod's `cd "$(dirname "$0")"` ran the tests from the wrong
+  directory and it re-ran them by module name, never the user's exact command.
+  Minor, but right. A check costs ~$0.0001-0.0004 and only runs on thoughts.
+
 - Open question: is the stale rule now too strict? On short tasks Nod always
   moves before a thought is ready, so the subconscious can only speak during
   slow tool calls or after the final answer. Worth checking on longer tasks

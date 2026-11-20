@@ -74,14 +74,22 @@ def main() -> int:
     if not args.off:
         agent.soul = f"{agent.soul}\n\n{SOUL_NOTE}"
         model = args.sub_model or cfg.model
-        sub = Subconscious(
-            provider=CappedProvider(
+
+        def brain(max_tokens: int) -> CappedProvider:
+            return CappedProvider(
                 model=model,
                 base_url=cfg.base_url,
                 # The pinned routing only makes sense for Nod's own model.
                 provider_routing=cfg.provider_routing if model == cfg.model else {},
                 reasoning=cfg.reasoning,
-            ),
+                max_tokens=max_tokens,
+            )
+
+        sub = Subconscious(
+            provider=brain(1500),
+            # The evidence check reasons for ~1.2-1.4k tokens and came back
+            # empty under the 1500 cap.
+            checker=brain(4000),
             memory_dir=cfg.memory_dir,
             inbox=agent.inbox,
             session_id=sid,
