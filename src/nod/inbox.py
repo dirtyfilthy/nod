@@ -25,7 +25,7 @@ class Event:
 
 
 class Inbox(Protocol):
-    def post(self, session_id: str, text: str) -> str: ...
+    def post(self, session_id: str, text: str, *, wake: bool = True) -> str: ...
 
     def pending(self, session_id: str) -> list[Event]: ...
 
@@ -40,7 +40,8 @@ class InMemoryInbox:
     `subscribe` registers a callback that is invoked with the session id after
     every post. Gateways use it to wake an idle agent; the callback runs on the
     poster's thread, so it must return quickly (hand the work to another
-    thread or a queue).
+    thread or a queue). A post with `wake=False` skips the callbacks: the
+    event waits for the session's next turn instead of starting one.
     """
 
     def __init__(self) -> None:
@@ -49,12 +50,12 @@ class InMemoryInbox:
         self._subscribers: list[Callable[[str], None]] = []
         self._next_id = 1
 
-    def post(self, session_id: str, text: str) -> str:
+    def post(self, session_id: str, text: str, *, wake: bool = True) -> str:
         with self._lock:
             event = Event(id=f"ev{self._next_id}", text=text)
             self._next_id += 1
             self._events.setdefault(session_id, []).append(event)
-            subscribers = list(self._subscribers)
+            subscribers = list(self._subscribers) if wake else []
         for callback in subscribers:
             callback(session_id)
         return event.id

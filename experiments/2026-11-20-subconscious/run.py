@@ -1,7 +1,7 @@
 """Nod with a subconscious.
 
-  run.py                     chat with it (thoughts can wake Nod while idle)
-  run.py --task "..."        one task, then let any late thoughts play out
+  run.py                     chat with it
+  run.py --task "..."        one task; a late thought is shown, not delivered
   run.py --demo              the task in demo/, run in a fresh copy under runs/
   run.py --demo --off        same, no subconscious (the baseline)
   run.py --demo --task "..." the demo files with a different instruction
@@ -77,13 +77,12 @@ def main() -> int:
             return 0
         agent.send(task, session_id=sid, on_token=lab.stream)
         print()
-        # A thought that lands after Nod's final reply gets a turn of its own,
-        # as it would in a chat; agent.max_wakeups bounds how often.
-        while sub is not None:
+        if sub is not None:
+            # Let it take its last look. A thought from that look never wakes
+            # Nod; in a chat it would surface before the next message.
             sub.wait_settled()
-            if agent.wake(sid, on_token=lab.stream) is None:
-                break
-            print()
+            for event in agent.inbox.pending(sid):
+                print(f"[held for the next turn] {event.text}", file=sys.stderr)
         return 0
     finally:
         if sub is not None:

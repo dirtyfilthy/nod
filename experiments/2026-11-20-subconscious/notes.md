@@ -67,6 +67,27 @@ reaches Nod at its next call anyway.
   user's next message, or tell Nod a woken turn may just be a second look.
 - demo-9: never spoke.
 
+Fixing the leak. Thoughts no longer wake Nod. `InMemoryInbox.post` got a
+`wake=False` option (a core change, on this branch only) that queues an event
+without calling subscribers, and the subconscious always uses it. A thought
+from mid-turn still arrives before Nod's next call; one that forms after the
+final answer waits and surfaces at the start of the next turn, just before the
+user's message. The soul note says so. `--task` runs print a held thought
+instead of waking Nod. Offline: no subscriber calls, and the held thought sits
+right before the next user message.
+
+- chat-1, chat-2, chat-3: the REPL driven through stdin with the hurried task
+  and follow-ups ("anything else?", "do your top suggestion"). No spontaneous
+  messages, no leaks. But no thought reached Nod either: all 6 that formed
+  were dropped as stale, and each relook said `nothing`. The ones I checked
+  were things Nod went on to say itself (chat-1: "no test covers that
+  quantity≤0 clause"; Nod's answer: "none of them covering the documented
+  `qty <= 0` behavior"). The held-after-final-answer path never came up live.
+- Open question: is the stale rule now too strict? On short tasks Nod always
+  moves before a thought is ready, so the subconscious can only speak during
+  slow tool calls or after the final answer. Worth checking on longer tasks
+  whether dropped thoughts were ever things Nod didn't get to on its own.
+
 **Verdict:** the plumbing works and it's cheap. The demo is too easy to tell
 whether it helps; it needs tasks where Nod actually goes wrong without it.
 Next: try it on SWE-bench instances Nod fails (docs/NOD_FAILURES.md), long chat

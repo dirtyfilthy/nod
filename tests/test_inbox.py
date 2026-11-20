@@ -25,3 +25,12 @@ def test_subscribers_hear_every_post():
     inbox.post("a", "x")
     inbox.post("b", "y")
     assert heard == ["a", "b"]
+
+
+def test_post_without_waking_skips_subscribers_but_still_queues():
+    inbox = InMemoryInbox()
+    heard: list[str] = []
+    inbox.subscribe(heard.append)
+    inbox.post("s", "quiet", wake=False)
+    assert heard == []
+    assert [e.text for e in inbox.pending("s")] == ["quiet"]

@@ -4,8 +4,11 @@ It runs on its own thread and reads the session's JSONL file the way any
 outside observer would. Whenever the transcript has moved on, it shows the
 recent part to its own model and asks for either nothing or one short thought.
 A thought goes into Nod's inbox, phrased as something Nod feels or that just
-came to it, so the loop delivers it before Nod's next provider call (or wakes
-Nod if it's idle and a gateway is listening).
+came to it, so the loop delivers it before Nod's next provider call. It never
+wakes Nod: a woken turn's reply goes to the user, and Nod answered a late
+thought as if the user had said it. A thought that forms after Nod's final
+answer waits and surfaces at the start of its next turn, before the user's
+message.
 
 Two things keep it from running behind Nod:
 - The file alone lags: Nod's reply is only persisted once its tool calls
@@ -46,7 +49,9 @@ SOUL_NOTE = """\
 Now and then a thought surfaces in you while you work: a flicker of
 uncertainty, an idea that just came to you, something tugging at your memory.
 It arrives in italics. It's yours, not the user's, so don't answer it or
-mention it. Treat it like any hunch: often worth a look, sometimes wrong."""
+mention it. Treat it like any hunch: often worth a look, sometimes wrong.
+One can also come to you between messages and surface just before the user's
+next one; it's still yours, not part of what they said."""
 
 PROMPT = """\
 You are the subconscious of an AI agent called Nod. You watch it work: its \
@@ -204,7 +209,9 @@ class Subconscious:
                 self._seen = None
                 _say(f"~ (dropped, stale) {kind}: {text}")
             elif kind is not None:
-                self.inbox.post(self.session_id, FRAMES[kind].format(text=text))
+                self.inbox.post(
+                    self.session_id, FRAMES[kind].format(text=text), wake=False
+                )
                 _say(f"~ {kind}: {text}")
         finally:
             self._busy.clear()
