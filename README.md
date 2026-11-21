@@ -28,6 +28,19 @@ python -m nod
 
 That drops you into a CLI chat. `cp config.example.toml config.toml` first if you want to change the model or paths.
 
+## One shot
+
+To hand Nod one task and get the answer back without a chat, use `run`:
+
+```sh
+nod run "summarise the TODOs in src/ into TODO.md"
+nod run -f task.md                       # instructions from a file
+nod run -f task.md "skip the tests"      # text on the line goes after the file's
+git diff | nod run -f - "review this"    # '-' reads stdin
+```
+
+Nod works through the task as it would in a chat turn, prints its final reply to stdout and exits: 0 when it answered, 1 when the provider failed, 2 when there were no instructions. Each run gets a fresh session, whose id is printed to stderr (`[session run-...]`); pick it up with `nod chat --session <id>`, or pass `--session` to `run` to continue an existing one. The sandbox flags go before `run` as usual (`nod --sandbox run ...`). With nod-extras loaded, jobs still running when the reply comes back are killed at exit, so a task that starts them should wait for them.
+
 ## Running as a service
 
 `python -m nod` (or `nod chat`) is the interactive REPL. To run Nod as a long-lived HTTP service instead, use the `serve` subcommand:

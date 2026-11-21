@@ -8,9 +8,11 @@ brain, store, or channel happens by editing the constructors here (or importing
 from __future__ import annotations
 
 import argparse
+import secrets
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 from nod import config as config_module
@@ -162,7 +164,33 @@ def main(argv: list[str] | None = None) -> int:
         "--port", type=int, default=None, help="Bind port (default: config)."
     )
 
+    run_p = sub.add_parser(
+        "run",
+        help="One shot: carry out one set of instructions, print the reply, exit.",
+    )
+    run_p.add_argument(
+        "text", nargs="*", help="The instructions (joined with spaces)."
+    )
+    run_p.add_argument(
+        "-f",
+        "--file",
+        help="Read the instructions from this file ('-' for stdin). "
+        "With text as well, the text goes after the file's contents.",
+    )
+    run_p.add_argument(
+        "--session",
+        default=None,
+        help="Session id (default: a fresh one, printed to stderr at the end).",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "run":
+        try:
+            instructions = _read_instructions(args)
+        except (OSError, ValueError) as exc:
+            print(f"[run] {exc}", file=sys.stderr)
+            return 2
 
     cfg = config_module.load(args.config)
     try:
@@ -181,8 +209,47 @@ def main(argv: list[str] | None = None) -> int:
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
+    if args.command == "run":
+        return _run_once(agent, instructions, args.session)
+
     gateway: Gateway = CLIGateway(session_id=args.session)
     gateway.run(agent)
+    return 0
+
+
+def _read_instructions(args: argparse.Namespace) -> str:
+    parts = []
+    if args.file == "-":
+        parts.append(sys.stdin.read())
+    elif args.file:
+        parts.append(Path(args.file).expanduser().read_text())
+    parts.append(" ".join(args.text))
+    instructions = "\n\n".join(p.strip() for p in parts if p.strip())
+    if not instructions:
+        raise ValueError("no instructions: pass them as arguments or with -f FILE")
+    return instructions
+
+
+def _run_once(agent: Agent, instructions: str, session_id: str | None) -> int:
+    """One turn on `instructions`, then out: the reply goes to stdout, the
+    session id to stderr so the conversation can be picked up with `nod chat`.
+
+    A job that finishes during the last provider call misses that turn, so its
+    event gets a wake-up before exit. Jobs still running when this returns are
+    killed at exit; a task that needs them should wait for them itself.
+    """
+    # A suffix keeps two runs started in the same second apart.
+    session_id = session_id or time.strftime("run-%Y%m%d-%H%M%S-") + secrets.token_hex(2)
+    try:
+        reply = agent.send(instructions, session_id=session_id)
+        while (woken := agent.wake(session_id)) is not None:
+            reply = woken
+    except Exception as exc:  # noqa: BLE001 - report it, don't dump a traceback
+        print(f"[error] {exc}", file=sys.stderr)
+        print(f"[session {session_id}]", file=sys.stderr)
+        return 1
+    print(reply)
+    print(f"[session {session_id}]", file=sys.stderr)
     return 0
 
 
