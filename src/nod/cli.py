@@ -11,6 +11,7 @@ import argparse
 import signal
 import sys
 import threading
+from pathlib import Path
 
 from nod import config as config_module
 from nod.agent import Agent
@@ -21,6 +22,7 @@ from nod.gateway import CLIGateway, Gateway
 from nod.inbox import InMemoryInbox
 from nod.memory import JSONFileMemory
 from nod.provider import OpenAICompatibleProvider, ProviderError
+from nod.sandbox import DockerSandbox, SandboxError, parse_mount
 from nod.skills import SkillLoader
 from nod.tools import ALWAYS_ACCEPT, ToolRegistry
 
@@ -35,7 +37,6 @@ def build_agent(cfg: Config) -> Agent:
     memory = JSONFileMemory(cfg.memory_dir)
     skills = SkillLoader(cfg.resolved_skills_dirs())
     inbox = InMemoryInbox()
-    registry = ToolRegistry(builtin_tools())
     compaction = CompactionConfig(
         enabled=cfg.compaction_enabled,
         context_window=cfg.context_window,
@@ -48,8 +49,18 @@ def build_agent(cfg: Config) -> Agent:
     try:
         from nod_extras.jobs import SUBAGENT_SOUL, AgentJobKind, Jobs, ShellJobKind, job_tools
     except ImportError:
-        pass
-    else:
+        Jobs = None
+
+    # With the sandbox on, every built-in tool (the subagents' and shell jobs
+    # too) runs in one container; Nod itself stays on the host.
+    sandbox = _build_sandbox(cfg, with_jobs=Jobs is not None) if cfg.sandbox else None
+
+    def plain_tools():
+        return sandbox.tools() if sandbox else builtin_tools()
+
+    registry = ToolRegistry(plain_tools())
+
+    if Jobs is not None:
 
         def child_agent(child_provider) -> Agent:
             # A subagent gets the parent's brain, store and skills, a
@@ -59,7 +70,7 @@ def build_agent(cfg: Config) -> Agent:
             # gate swapped in after build_agent covers subagents too.
             return Agent(
                 provider=child_provider,
-                registry=ToolRegistry(builtin_tools()),
+                registry=ToolRegistry(plain_tools()),
                 memory=memory,
                 skills=skills,
                 soul=SUBAGENT_SOUL,
@@ -70,7 +81,12 @@ def build_agent(cfg: Config) -> Agent:
 
         jobs = Jobs(
             inbox,
-            [ShellJobKind(), AgentJobKind(provider, child_agent)],
+            [
+                ShellJobKind(argv=sandbox.job_argv, kill=sandbox.job_kill)
+                if sandbox
+                else ShellJobKind(),
+                AgentJobKind(provider, child_agent),
+            ],
             jobs_dir=cfg.jobs_dir,
         )
         for t in job_tools(jobs):
@@ -89,12 +105,47 @@ def build_agent(cfg: Config) -> Agent:
         inbox=inbox,
         pre_tool_hook=ALWAYS_ACCEPT,
     )
+    if sandbox:
+        sandbox.start()
     return agent
+
+
+def _build_sandbox(cfg: Config, *, with_jobs: bool) -> DockerSandbox:
+    mounts = [parse_mount(m, cfg.base_dir) for m in cfg.sandbox_mounts]
+    if with_jobs:
+        # The job tools tell the model to read_file a job's log, so the logs
+        # have to be visible in the container too.
+        jobs_dir = Path(cfg.jobs_dir).expanduser().resolve()
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        mounts.append(f"{jobs_dir}:{jobs_dir}:ro")
+    return DockerSandbox(
+        workspace=cfg.resolve(cfg.sandbox_workspace),
+        mounts=mounts,
+        network=cfg.sandbox_network,
+        image=cfg.sandbox_image,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nod", description="A thin agent core.")
     parser.add_argument("-c", "--config", help="Path to a config.toml file.")
+    sandbox_g = parser.add_argument_group(
+        "sandbox", "Run the tools in a Docker container. Any of these turns it on."
+    )
+    sandbox_g.add_argument("--sandbox", action="store_true", help="Turn the sandbox on.")
+    sandbox_g.add_argument(
+        "--workspace", help="Host dir mounted at /workspace (default: the current dir)."
+    )
+    sandbox_g.add_argument(
+        "--mount",
+        action="append",
+        default=[],
+        metavar="HOST[:CONTAINER][:ro]",
+        help="Extra mount, at the same path unless CONTAINER is given. Repeatable.",
+    )
+    sandbox_g.add_argument(
+        "--no-network", action="store_true", help="Give the container no network."
+    )
     # Default action (no subcommand) is the interactive chat REPL.
     parser.set_defaults(command="chat", session="cli", host=None, port=None)
 
@@ -115,8 +166,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = config_module.load(args.config)
     try:
+        _apply_sandbox_args(cfg, args)
         agent = build_agent(cfg)
-    except ProviderError as exc:
+    except (ProviderError, SandboxError) as exc:
         print(f"[config] {exc}", file=sys.stderr)
         return 2
 
@@ -132,6 +184,17 @@ def main(argv: list[str] | None = None) -> int:
     gateway: Gateway = CLIGateway(session_id=args.session)
     gateway.run(agent)
     return 0
+
+
+def _apply_sandbox_args(cfg: Config, args: argparse.Namespace) -> None:
+    if args.sandbox or args.workspace or args.mount or args.no_network:
+        cfg.sandbox = True
+    if args.workspace:
+        cfg.sandbox_workspace = str(Path(args.workspace).expanduser().resolve())
+    # Paths on the command line are relative to the current dir, not the config.
+    cfg.sandbox_mounts = cfg.sandbox_mounts + [parse_mount(m, Path.cwd()) for m in args.mount]
+    if args.no_network:
+        cfg.sandbox_network = False
 
 
 def _serve(cfg: Config, agent: Agent, args: argparse.Namespace) -> int:

@@ -47,6 +47,15 @@ class Config:
     context_window: int = 512_000
     reserve_tokens: int = 16_384
     keep_recent_tokens: int = 20_000
+    # Run the built-in tools in a Docker container (see sandbox.py) instead of
+    # on the host. The workspace is mounted at /workspace; `sandbox_mounts`
+    # are extra `HOST[:CONTAINER][:ro]` mounts. An empty image means Nod's own,
+    # built on first use.
+    sandbox: bool = False
+    sandbox_image: str = ""
+    sandbox_workspace: str = "."
+    sandbox_mounts: list[str] = field(default_factory=list)
+    sandbox_network: bool = True
     # Directory the config was loaded from; relative paths resolve against it.
     base_dir: Path = field(default_factory=Path.cwd)
 
@@ -103,6 +112,18 @@ def load(path: str | Path | None = None) -> Config:
         for source, target in mapping.items():
             if source in compaction:
                 setattr(cfg, target, compaction[source])
+    sandbox = raw.get("sandbox", {})
+    if isinstance(sandbox, dict):
+        mapping = {
+            "enabled": "sandbox",
+            "image": "sandbox_image",
+            "workspace": "sandbox_workspace",
+            "mounts": "sandbox_mounts",
+            "network": "sandbox_network",
+        }
+        for source, target in mapping.items():
+            if source in sandbox:
+                setattr(cfg, target, sandbox[source])
     routing = raw.get("provider_routing")
     if isinstance(routing, dict):
         cfg.provider_routing = routing
