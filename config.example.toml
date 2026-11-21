@@ -40,3 +40,17 @@ skills_dirs = ["../nod-extras/skills"]
 # the NOD_API_TOKEN environment variable, never from this file.
 host = "127.0.0.1"
 port = 8080
+
+# Run every built-in tool in a Docker container instead of on the host. Nod,
+# its API key, memory and config stay on the host. The CLI flags --sandbox,
+# --workspace, --mount and --no-network turn this on and add to it.
+[sandbox]
+enabled = false
+# Host dir mounted at /workspace, the tools' working directory.
+workspace = "."
+# Extra mounts, "HOST[:CONTAINER][:ro]"; same path as on the host by default.
+mounts = []
+# false gives the container no network (http_get and the shell can't fetch).
+network = true
+# Empty builds and uses Nod's own image (src/nod/sandbox.Dockerfile).
+image = ""

@@ -51,7 +51,7 @@ It's a new `HTTPGateway` (see `server.py`) alongside the `CLIGateway`; the agent
 
 ## Running in Docker
 
-To make a container the sandbox instead of the host, use the `Dockerfile` and its wrapper script:
+To run all of Nod in a container (rather than only its tools; see "Sandboxing the tools" below for that), use the `Dockerfile` and its wrapper script:
 
 ```sh
 deploy/docker/nod-docker.sh build     # adds ../nod-extras (job tools, skills) if it's there
@@ -61,7 +61,27 @@ deploy/docker/nod-docker.sh chat      # or a CLI chat in a throwaway container
 
 The env file is the same one the systemd unit uses (`OPENROUTER_API_KEY`, `NOD_API_TOKEN`). The image runs Nod as an unprivileged `nod` user, with Nod's code and venv owned by root so the agent can't edit its own runtime. Sessions, job logs and the agent's working directory live on the `nod-data` volume under `/var/lib/nod`. The image's config is `deploy/docker/container.toml`; point `NOD_CONFIG` at your own file to mount one over it. The script publishes the port on `127.0.0.1` only and runs every container with `--cap-drop ALL`, `no-new-privileges`, memory and process limits, and `--init` to reap the agent's orphaned processes. Add whatever the agent's shell should have to the `apt-get install` line.
 
-The container protects the host from the agent, not anything inside the container from it. The API key is in the container's environment, the agent needs outbound network for the provider and `http_get`, and it can read and rewrite its own session history. Use a dedicated OpenRouter key with a spending limit.
+The container protects the host from the agent, not anything inside the container from it. The API key is in the container's environment, the agent needs outbound network for the provider and `http_get`, and it can read and rewrite its own session history. Use a dedicated OpenRouter key with a spending limit, or sandbox only the tools instead.
+
+## Sandboxing the tools
+
+To keep Nod on the host but run every tool in a container, turn the sandbox on:
+
+```sh
+nod --sandbox                                   # tools see only the current dir, at /workspace
+nod --workspace ~/src/proj --mount ~/datasets:ro --no-network
+nod --mount ~/notes:/notes serve                # works the same for the service
+```
+
+Every built-in tool call (`read_file`, `cud_file`, `list_dir`, `run_shell`, `http_get`) then runs inside one Docker container that Nod starts at launch and removes when it exits. Subagents and background shell jobs from nod-extras use it too. The tools are the host's own code, mounted read-only and run through `python -m nod.toolhost`, so they behave exactly as they do on the host but see only what is mounted:
+
+- the workspace (`--workspace`, default the current dir) at `/workspace`, which is also their working directory;
+- each `--mount HOST[:CONTAINER][:ro]`, at the same path as on the host unless you give one;
+- the job logs, read-only, when nod-extras is loaded.
+
+`--no-network` gives the container no network at all, so `http_get` and anything the shell fetches fail; the model is still reached from the host. The container runs as your user (files it writes stay yours) with every capability dropped, `no-new-privileges`, and memory and process limits. The API key and the session history stay on the host, out of the tools' reach, and so do `SOUL.md` and the config unless they sit in the workspace (with the default workspace, that means not running from the directory that holds them).
+
+The same settings live under `[sandbox]` in `config.toml` (see `config.example.toml`); flags add to them. The image (`src/nod/sandbox.Dockerfile`: Python, git, curl) is built the first time it's needed. To give the tools more, build your own `FROM` it and set `image`. If Nod is killed hard, the container is left behind; `docker rm -f $(docker ps -q --filter label=nod.sandbox)` clears it. Skills stay on the host: `read_skill` reads Nod's own skill files and runs no command.
 
 ## Built-in tools
 
@@ -71,7 +91,7 @@ Anything richer belongs in the sibling `nod-extras` repo. The first thing there 
 
 ## Security model
 
-Nod assumes it runs on a dedicated VPS, not your home box. The host is the sandbox. `run_shell`, `cud_file`, and `http_get` have the full reach of the process user by design, so the blast radius is whatever you put on that VPS. Isolation is operational, not enforced in code: run Nod on a disposable machine, as a non-root user, with no secrets on the box beyond what it needs. To narrow what the model can do, trim the tool list in `cli.py`.
+Nod assumes it runs on a dedicated VPS, not your home box. The host is the sandbox. `run_shell`, `cud_file`, and `http_get` have the full reach of the process user by design, so the blast radius is whatever you put on that VPS. Isolation is operational, not enforced in code: run Nod on a disposable machine, as a non-root user, with no secrets on the box beyond what it needs. To narrow what the model can do, trim the tool list in `cli.py`, or run the tools in a container with `--sandbox` (above).
 
 Skills are plain markdown with a tiny frontmatter, discovered from the directories in `skills_dirs`:
 
