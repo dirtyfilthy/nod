@@ -215,7 +215,13 @@ def test_build_agent_routes_builtin_tools_through_the_sandbox(tmp_path, monkeypa
     monkeypatch.setattr(DockerSandbox, "call", lambda self, name, args: calls.append(name) or "ok")
     monkeypatch.setenv("OPENROUTER_API_KEY", "test")
 
-    cfg = Config(memory_dir=str(tmp_path / "m"), skills_dirs=[], sandbox=True, sandbox_workspace=str(tmp_path))
+    cfg = Config(
+        memory_dir=str(tmp_path / "m"),
+        jobs_dir=str(tmp_path / "jobs"),
+        skills_dirs=[],
+        sandbox=True,
+        sandbox_workspace=str(tmp_path),
+    )
     agent = build_agent(cfg)
 
     assert agent.registry.dispatch(ToolCall(id="1", name="list_dir", arguments={})) == "ok"
@@ -230,6 +236,7 @@ def test_build_agent_tells_the_model_when_the_network_is_cut(tmp_path, monkeypat
 
     cfg = Config(
         memory_dir=str(tmp_path / "m"),
+        jobs_dir=str(tmp_path / "jobs"),
         skills_dirs=[],
         soul_path=str(tmp_path / "SOUL.md"),
         sandbox=True,
