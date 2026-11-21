@@ -1,0 +1,11 @@
+.git
+.venv
+.pytest_cache
+.claude
+.cursor
+**/__pycache__
+*.py[cod]
+config.toml
+.env
+bench
+tests
