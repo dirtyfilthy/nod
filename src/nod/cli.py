@@ -60,6 +60,11 @@ def build_agent(cfg: Config) -> Agent:
     def plain_tools():
         return sandbox.tools() if sandbox else builtin_tools()
 
+    def with_sandbox_note(soul: str) -> str:
+        # Tell the model about limits it can't see, like a cut network.
+        note = sandbox.prompt_note() if sandbox else ""
+        return f"{soul.rstrip()}\n\n{note}" if note else soul
+
     registry = ToolRegistry(plain_tools())
 
     if Jobs is not None:
@@ -75,7 +80,7 @@ def build_agent(cfg: Config) -> Agent:
                 registry=ToolRegistry(plain_tools()),
                 memory=memory,
                 skills=skills,
-                soul=SUBAGENT_SOUL,
+                soul=with_sandbox_note(SUBAGENT_SOUL),
                 max_turns=cfg.max_turns,
                 compaction=compaction,
                 pre_tool_hook=agent.pre_tool_hook,
@@ -101,7 +106,7 @@ def build_agent(cfg: Config) -> Agent:
         registry=registry,
         memory=memory,
         skills=skills,
-        soul=cfg.soul(),
+        soul=with_sandbox_note(cfg.soul()),
         max_turns=cfg.max_turns,
         compaction=compaction,
         inbox=inbox,
