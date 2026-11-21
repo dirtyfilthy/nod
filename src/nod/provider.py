@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from typing import Any, Callable, Iterable, Protocol
 
@@ -105,6 +106,15 @@ class OpenAICompatibleProvider:
         # stream, a dropped connection, 429 or 5xx. Other errors fail at once.
         self.retries = retries
         self._sleep = sleep
+        # Running totals over every call this provider has completed, whoever
+        # made it (the loop, compaction, a subagent). `nod run` prints them.
+        self.usage: dict[str, Any] = {
+            "calls": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cost": 0.0,
+        }
+        self._usage_lock = threading.Lock()
         if not self.api_key:
             raise ProviderError(
                 f"No API key. Set ${api_key_env} or pass api_key explicitly."
@@ -132,7 +142,15 @@ class OpenAICompatibleProvider:
                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_at)
             )
             reply.meta["attempts"] = attempt
+            self._count(reply.meta.get("usage") or {})
             return reply
+
+    def _count(self, usage: dict[str, Any]) -> None:
+        with self._usage_lock:
+            self.usage["calls"] += 1
+            self.usage["prompt_tokens"] += usage.get("prompt_tokens") or 0
+            self.usage["completion_tokens"] += usage.get("completion_tokens") or 0
+            self.usage["cost"] = round(self.usage["cost"] + (usage.get("cost") or 0.0), 6)
 
     def _complete_once(
         self,

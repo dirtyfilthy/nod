@@ -132,13 +132,18 @@ class DockerSandbox:
             try:
                 if self.image == default_image() and not self._image_exists():
                     self._build_image()
+                # Marked as started before `docker run`, not after it: an exit
+                # that lands while it runs (a SIGTERM, say) must still remove
+                # the container.
+                self._started = True
+                atexit.register(self.stop)
                 result = self._run(self.run_argv())
             except FileNotFoundError:
+                self._started = False
                 raise SandboxError("docker not found on PATH") from None
             if result.returncode != 0:
+                self._started = False
                 raise SandboxError(f"could not start the sandbox: {result.stderr.strip()}")
-            self._started = True
-            atexit.register(self.stop)
 
     def stop(self) -> None:
         with self._lock:

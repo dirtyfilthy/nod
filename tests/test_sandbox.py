@@ -91,6 +91,39 @@ def test_start_reports_a_missing_docker(tmp_path):
         _sandbox(tmp_path, no_docker).start()
 
 
+def test_an_exit_while_the_container_starts_still_removes_it(tmp_path):
+    # SIGTERM is turned into SystemExit, which can land inside `docker run`.
+    docker = FakeDocker()
+
+    def killed_during_run(argv, **kwargs):
+        if argv[:2] == ["docker", "run"]:
+            raise SystemExit(0)
+        return docker(argv, **kwargs)
+
+    sandbox = _sandbox(tmp_path, killed_during_run)
+    with pytest.raises(SystemExit):
+        sandbox.start()
+    sandbox.stop()  # what atexit runs
+
+    assert docker.commands(["docker", "rm", "-f"]) == [["docker", "rm", "-f", sandbox.name]]
+
+
+def test_a_start_that_fails_leaves_nothing_to_remove(tmp_path):
+    docker = FakeDocker()
+
+    def refused(argv, **kwargs):
+        if argv[:2] == ["docker", "run"]:
+            return subprocess.CompletedProcess(argv, 125, "", "no such image")
+        return docker(argv, **kwargs)
+
+    sandbox = _sandbox(tmp_path, refused)
+    with pytest.raises(SandboxError, match="no such image"):
+        sandbox.start()
+    sandbox.stop()
+
+    assert not docker.commands(["docker", "rm", "-f"])
+
+
 def test_tool_call_runs_the_toolhost_in_the_container(tmp_path):
     docker = FakeDocker(stdout=json.dumps({"result": "exit code: 0\nhi"}))
     sandbox = _sandbox(tmp_path, docker)
