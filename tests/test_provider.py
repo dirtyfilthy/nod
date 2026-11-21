@@ -88,6 +88,48 @@ def test_payload_omits_provider_when_routing_empty():
     assert "provider" not in _provider()._payload([], None)
 
 
+PIN = {"order": ["deepseek"], "allow_fallbacks": False}
+
+
+def _routed(model, **scope):
+    p = OpenAICompatibleProvider(model=model, api_key="x", provider_routing=PIN | scope)
+    return p._payload([], None).get("provider")
+
+
+def test_routing_with_models_applies_to_those_exact_models_only():
+    scope = {"models": ["deepseek/a", "deepseek/b"]}
+    assert _routed("deepseek/a", **scope) == PIN
+    assert _routed("deepseek/b", **scope) == PIN
+    assert _routed("deepseek/a-turbo", **scope) is None
+    assert _routed("openai/x", **scope) is None
+
+
+def test_routing_with_model_prefix_applies_to_models_that_start_with_it():
+    assert _routed("deepseek/a", model_prefix="deepseek/") == PIN
+    assert _routed("openai/deepseek/a", model_prefix="deepseek/") is None
+
+
+def test_routing_with_both_scopes_applies_to_a_model_matching_either():
+    scope = {"models": ["openai/x"], "model_prefix": "deepseek/"}
+    assert _routed("openai/x", **scope) == PIN
+    assert _routed("deepseek/a", **scope) == PIN
+    assert _routed("openai/y", **scope) is None
+
+
+def test_routing_scope_keys_are_never_sent():
+    sent = _routed("deepseek/a", models=["deepseek/a"], model_prefix="deepseek/")
+    assert sent == PIN
+
+
+def test_routing_takes_a_single_model_as_a_string():
+    assert _routed("deepseek/a", models="deepseek/a") == PIN
+    assert _routed("deepseek", models="deepseek/a") is None
+
+
+def test_routing_with_empty_scope_matches_no_model():
+    assert _routed("deepseek/a", models=[]) is None
+
+
 REASONING_LINES = [
     'data: {"choices":[{"delta":{"reasoning":"Need ","reasoning_details":[{"type":"reasoning.text","text":"Need ","format":"unknown","index":0}]}}]}',
     'data: {"choices":[{"delta":{"reasoning":"to look.","reasoning_details":[{"type":"reasoning.text","text":"to look.","format":"unknown","index":0}]}}]}',

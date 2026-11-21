@@ -35,6 +35,30 @@ class ProviderError(RuntimeError):
     """Raised when the upstream endpoint refuses or fails a request."""
 
 
+# Keys in the routing config that say which models it applies to. They are
+# Nod's own and are never sent.
+ROUTING_SCOPE_KEYS = ("models", "model_prefix")
+
+
+def routing_for(model: str, routing: dict[str, Any]) -> dict[str, Any]:
+    """The `provider` field to send for `model`, or {} to send none.
+
+    Routing with neither scope key applies to every model. With `models` (exact
+    ids) or `model_prefix` it applies only to a model that matches either one.
+    """
+
+    models = routing.get("models")
+    prefix = routing.get("model_prefix")
+    if models is None and prefix is None:
+        return routing
+    if isinstance(models, str):
+        models = [models]
+    matches = model in (models or []) or (bool(prefix) and model.startswith(prefix))
+    if not matches:
+        return {}
+    return {k: v for k, v in routing.items() if k not in ROUTING_SCOPE_KEYS}
+
+
 class OpenAICompatibleProvider:
     """Default brain: any OpenAI-compatible chat-completions endpoint.
 
@@ -71,7 +95,8 @@ class OpenAICompatibleProvider:
         self.deadline_seconds = deadline_seconds
         self.extra_headers = extra_headers or {}
         # OpenRouter's `provider` request field (order, allow_fallbacks, ...).
-        # Pins which upstream serves the model; omitted from the request when empty.
+        # Pins which upstream serves the model; omitted from the request when
+        # empty, or when its `models` / `model_prefix` don't cover this model.
         self.provider_routing = provider_routing or {}
         # OpenRouter's `reasoning` request field, e.g. {"effort": "high"} or
         # {"enabled": False}. Omitted when empty, leaving the model's default.
@@ -158,8 +183,9 @@ class OpenAICompatibleProvider:
         }
         if tools:
             payload["tools"] = tools
-        if self.provider_routing:
-            payload["provider"] = self.provider_routing
+        routing = routing_for(self.model, self.provider_routing)
+        if routing:
+            payload["provider"] = routing
         if self.reasoning:
             payload["reasoning"] = self.reasoning
         return payload
