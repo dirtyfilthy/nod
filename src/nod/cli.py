@@ -131,6 +131,9 @@ def _build_sandbox(cfg: Config, *, with_jobs: bool) -> DockerSandbox:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nod", description="A thin agent core.")
     parser.add_argument("-c", "--config", help="Path to a config.toml file.")
+    parser.add_argument(
+        "-m", "--model", help="Model id to use instead of the config's (e.g. openai/gpt-5)."
+    )
     sandbox_g = parser.add_argument_group(
         "sandbox", "Run the tools in a Docker container. Any of these turns it on."
     )
@@ -193,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     cfg = config_module.load(args.config)
+    if args.model:
+        cfg.model = args.model
     try:
         _apply_sandbox_args(cfg, args)
         agent = build_agent(cfg)

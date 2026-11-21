@@ -26,7 +26,7 @@ export OPENROUTER_API_KEY=sk-or-...
 python -m nod
 ```
 
-That drops you into a CLI chat. `cp config.example.toml config.toml` first if you want to change the model or paths.
+That drops you into a CLI chat. `cp config.example.toml config.toml` first if you want to change the model or paths. To try another model without touching the config, pass `--model` (before any subcommand): `nod --model openai/gpt-5 run "..."`.
 
 ## One shot
 

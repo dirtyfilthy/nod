@@ -100,3 +100,16 @@ def test_run_reports_a_failing_provider_and_exits_1(monkeypatch, tmp_path, capsy
     out, err = capsys.readouterr()
     assert out == ""
     assert "[error] provider down" in err and "[session s]" in err
+
+
+def test_model_flag_overrides_the_config(monkeypatch, tmp_path):
+    seen = []
+    _wire(monkeypatch, tmp_path, [assistant("a"), assistant("b")])
+    agent_for = cli.build_agent
+    monkeypatch.setattr(cli, "build_agent", lambda cfg: seen.append(cfg.model) or agent_for(cfg))
+    (tmp_path / "config.toml").write_text('model = "from/config"\n')
+
+    cli.main(["run", "go"])
+    cli.main(["--model", "from/flag", "run", "go"])
+
+    assert seen == ["from/config", "from/flag"]
