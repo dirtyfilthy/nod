@@ -15,6 +15,7 @@ uv run --extra dev pytest -q                                   # full suite
 uv run --extra dev pytest -q tests/test_tools.py::test_dispatch_unknown_tool   # one test
 uv run nod                         # interactive CLI chat (needs OPENROUTER_API_KEY)
 NOD_API_TOKEN=... uv run nod serve # HTTP service on 127.0.0.1:8080
+deploy/docker/nod-docker.sh build && deploy/docker/nod-docker.sh serve   # same, in a container
 uv run python bench/swebench/run_nod.py --dry-run --count 5    # list SWE-bench instances, no spend
 ```
 
@@ -35,7 +36,7 @@ Tests never call a real model: `tests/conftest.py` has `FakeProvider`, which pla
 
 ## Security model
 
-The host is the sandbox: `run_shell`, `cud_file` and `http_get` have the full reach of the process user by design, and Nod is meant to run on a disposable VPS. Isolation is operational, not enforced in code, so don't add in-code sandboxing unless asked. Narrowing what the model can do means trimming the tool list in `cli.py`, or replacing the pre-tool hook (core's default accepts every call; judging calls is nod-extras' job).
+The host is the sandbox: `run_shell`, `cud_file` and `http_get` have the full reach of the process user by design, and Nod is meant to run on a disposable VPS. Isolation is operational, not enforced in code, so don't add in-code sandboxing unless asked. Narrowing what the model can do means trimming the tool list in `cli.py`, or replacing the pre-tool hook (core's default accepts every call; judging calls is nod-extras' job). The `Dockerfile` (wrapped by `deploy/docker/nod-docker.sh`, config in `deploy/docker/container.toml`) is the operational alternative to a disposable host: same tools, with the container as the sandbox.
 
 ## SWE-bench (`bench/swebench/`)
 

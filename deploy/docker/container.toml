@@ -1,0 +1,18 @@
+# Config baked into the Docker image as /etc/nod/config.toml. Only the keys that
+# differ from the defaults for a container are set here; see
+# config.example.toml for the rest. To change the model, mount your own file
+# over this one (-v ./my.toml:/etc/nod/config.toml:ro).
+
+soul_path = "/opt/nod/SOUL.md"
+
+# Everything Nod writes lives on the /var/lib/nod volume.
+memory_dir = "/var/lib/nod/memory"
+jobs_dir = "/var/lib/nod/jobs"
+
+# Empty unless the image was built with nod-extras; a missing dir is skipped.
+skills_dirs = ["/opt/nod-extras/skills"]
+
+# Bind every interface inside the container so the published port reaches it.
+# The run script publishes it on the host's loopback only.
+host = "0.0.0.0"
+port = 8080

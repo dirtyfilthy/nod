@@ -49,6 +49,20 @@ The service refuses to start without `NOD_API_TOKEN`, since the built-in tools g
 
 It's a new `HTTPGateway` (see `server.py`) alongside the `CLIGateway`; the agent core is untouched, and the whole thing is ~150 lines of stdlib. A ready-to-edit systemd unit and env-file template live in `deploy/`.
 
+## Running in Docker
+
+To make a container the sandbox instead of the host, use the `Dockerfile` and its wrapper script:
+
+```sh
+deploy/docker/nod-docker.sh build     # adds ../nod-extras (job tools, skills) if it's there
+NOD_ENV_FILE=/etc/nod/nod.env deploy/docker/nod-docker.sh serve
+deploy/docker/nod-docker.sh chat      # or a CLI chat in a throwaway container
+```
+
+The env file is the same one the systemd unit uses (`OPENROUTER_API_KEY`, `NOD_API_TOKEN`). The image runs Nod as an unprivileged `nod` user, with Nod's code and venv owned by root so the agent can't edit its own runtime. Sessions, job logs and the agent's working directory live on the `nod-data` volume under `/var/lib/nod`. The image's config is `deploy/docker/container.toml`; point `NOD_CONFIG` at your own file to mount one over it. The script publishes the port on `127.0.0.1` only and runs every container with `--cap-drop ALL`, `no-new-privileges`, memory and process limits, and `--init` to reap the agent's orphaned processes. Add whatever the agent's shell should have to the `apt-get install` line.
+
+The container protects the host from the agent, not anything inside the container from it. The API key is in the container's environment, the agent needs outbound network for the provider and `http_get`, and it can read and rewrite its own session history. Use a dedicated OpenRouter key with a spending limit.
+
 ## Built-in tools
 
 The core ships five small tools: `read_file`, `cud_file`, `list_dir`, `run_shell`, and `http_get`. `read_file` returns paginated line ranges with offsets, and `cud_file` creates, updates, and deletes files with SEARCH/REPLACE blocks. They are deliberately plain and registered in `cli.py` so you can remove or replace any of them in one place.
