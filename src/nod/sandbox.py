@@ -38,6 +38,14 @@ from nod import builtins as builtins_module
 from nod.tools import Tool
 
 WORKSPACE = "/workspace"
+
+# Appended to the system prompt when the container has no network, so the
+# model doesn't burn turns retrying downloads that can't work.
+NO_NETWORK_NOTE = (
+    "Your tools run in a sandbox with no external network access: http_get, "
+    "package installs and any download from the shell will fail. Work with "
+    "what is already in the workspace and the mounted directories."
+)
 NOD_SRC = "/opt/nod-src"
 TOOLHOST_PYTHON = "/opt/toolhost/bin/python"
 DOCKERFILE = Path(__file__).with_name("sandbox.Dockerfile")
@@ -106,6 +114,10 @@ class DockerSandbox:
         self._run = run
         self._lock = threading.Lock()
         self._started = False
+
+    def prompt_note(self) -> str:
+        """What the model should be told about this sandbox, or ""."""
+        return "" if self.network else NO_NETWORK_NOTE
 
     # -- lifecycle ---------------------------------------------------------
 

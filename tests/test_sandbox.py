@@ -14,7 +14,7 @@ from nod import toolhost
 from nod.cli import _apply_sandbox_args, build_agent, main
 from nod.config import Config, load
 from nod.messages import ToolCall
-from nod.sandbox import DockerSandbox, SandboxError, default_image, parse_mount
+from nod.sandbox import NO_NETWORK_NOTE, DockerSandbox, SandboxError, default_image, parse_mount
 from nod.tools import ToolRegistry
 
 
@@ -220,6 +220,25 @@ def test_build_agent_routes_builtin_tools_through_the_sandbox(tmp_path, monkeypa
 
     assert agent.registry.dispatch(ToolCall(id="1", name="list_dir", arguments={})) == "ok"
     assert calls == ["list_dir"]
+    assert NO_NETWORK_NOTE not in agent.system_prompt()
+
+
+def test_build_agent_tells_the_model_when_the_network_is_cut(tmp_path, monkeypatch):
+    monkeypatch.setattr(DockerSandbox, "start", lambda self: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    (tmp_path / "SOUL.md").write_text("I am Nod.\n")
+
+    cfg = Config(
+        memory_dir=str(tmp_path / "m"),
+        skills_dirs=[],
+        soul_path=str(tmp_path / "SOUL.md"),
+        sandbox=True,
+        sandbox_workspace=str(tmp_path),
+        sandbox_network=False,
+    )
+    prompt = build_agent(cfg).system_prompt()
+
+    assert prompt.startswith("I am Nod.\n\n" + NO_NETWORK_NOTE)
 
 
 # -- against a real Docker daemon: NOD_DOCKER_TESTS=1 to run -----------------
