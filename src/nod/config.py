@@ -24,9 +24,15 @@ class Config:
     base_url: str = "https://openrouter.ai/api/v1"
     # OpenRouter provider routing, sent as the request's `provider` field. Pinned
     # to DeepSeek's own deployment so runs aren't silently spread across hosts
-    # serving differently quantized copies. Empty sends nothing.
+    # serving differently quantized copies. Empty sends nothing. `models` (exact
+    # ids) and `model_prefix` are Nod's own keys: with either set, the routing is
+    # sent only for a matching model, so the pin doesn't break `--model other/x`.
     provider_routing: dict[str, Any] = field(
-        default_factory=lambda: {"order": ["deepseek"], "allow_fallbacks": False}
+        default_factory=lambda: {
+            "order": ["deepseek"],
+            "allow_fallbacks": False,
+            "model_prefix": "deepseek/",
+        }
     )
     # OpenRouter's `reasoning` request field, e.g. {"effort": "high"}. Empty sends
     # nothing and leaves the model's default.

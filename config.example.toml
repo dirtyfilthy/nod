@@ -10,7 +10,11 @@ base_url = "https://openrouter.ai/api/v1"
 # DeepSeek's own deployment with no fallbacks, so requests fail rather than land
 # on another host. Set to {} to let OpenRouter choose (or for non-OpenRouter
 # endpoints).
-provider_routing = { order = ["deepseek"], allow_fallbacks = false }
+# `models` (a list of exact model ids) and `model_prefix` are Nod's own keys and
+# are not sent: with either set, the routing applies only to a model that
+# matches one of them, and any other model is sent with no routing at all.
+# Without them the routing applies to every model.
+provider_routing = { order = ["deepseek"], allow_fallbacks = false, model_prefix = "deepseek/" }
 
 # OpenRouter's `reasoning` request field for thinking models, e.g.
 # { effort = "high" } or { enabled = false }. Empty leaves the model's default.
