@@ -8,6 +8,7 @@ brain, store, or channel happens by editing the constructors here (or importing
 from __future__ import annotations
 
 import argparse
+import json
 import secrets
 import signal
 import sys
@@ -139,6 +140,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "-m", "--model", help="Model id to use instead of the config's (e.g. openai/gpt-5)."
     )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        metavar="N",
+        help="Provider round-trips one turn may take, instead of the config's.",
+    )
     sandbox_g = parser.add_argument_group(
         "sandbox", "Run the tools in a Docker container. Any of these turns it on."
     )
@@ -175,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     run_p = sub.add_parser(
         "run",
         help="One shot: carry out one set of instructions, print the reply, exit.",
+        epilog=RUN_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     run_p.add_argument(
         "text", nargs="*", help="The instructions (joined with spaces)."
@@ -203,6 +212,16 @@ def main(argv: list[str] | None = None) -> int:
     cfg = config_module.load(args.config)
     if args.model:
         cfg.model = args.model
+    if args.max_turns is not None:
+        cfg.max_turns = args.max_turns
+
+    # A plain SIGTERM would skip atexit, and with it the hooks that remove the
+    # sandbox container and kill background jobs. Turn it into a normal exit
+    # instead. Installed before the agent is built, because building it starts
+    # the container (the HTTP gateway swaps in its own handlers while it runs).
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+
     try:
         _apply_sandbox_args(cfg, args)
         agent = build_agent(cfg)
@@ -212,12 +231,6 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "serve":
         return _serve(cfg, agent, args)
-
-    # A plain SIGTERM would skip atexit, and with it the hook that kills
-    # background jobs. Turn it into a normal exit instead (the HTTP gateway
-    # handles its own signals).
-    if threading.current_thread() is threading.main_thread():
-        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     if args.command == "run":
         return _run_once(agent, instructions, args.session)
@@ -240,9 +253,24 @@ def _read_instructions(args: argparse.Namespace) -> str:
     return instructions
 
 
+RUN_EPILOG = """\
+The reply goes to stdout. Two lines go to stderr at the end, on failure too:
+  [usage {...}]    provider calls, tokens and cost of this run, as JSON
+  [session <id>]   the session, to pick up with `nod chat --session <id>`
+
+exit status:
+  0  Nod replied. A turn cut short by the max_turns limit also exits 0, and
+     its reply is "(stopped: hit the max_turns limit before finishing)".
+  1  the turn failed (the provider, usually); stderr has an [error] line
+  2  nothing ran: no instructions, an unreadable file, or a config, API key
+     or sandbox problem
+"""
+
+
 def _run_once(agent: Agent, instructions: str, session_id: str | None) -> int:
-    """One turn on `instructions`, then out: the reply goes to stdout, the
-    session id to stderr so the conversation can be picked up with `nod chat`.
+    """One turn on `instructions`, then out: the reply goes to stdout, what the
+    run used and the session id to stderr, so a caller can cost the run and the
+    conversation can be picked up with `nod chat`.
 
     A job that finishes during the last provider call misses that turn, so its
     event gets a wake-up before exit. Jobs still running when this returns are
@@ -256,11 +284,20 @@ def _run_once(agent: Agent, instructions: str, session_id: str | None) -> int:
             reply = woken
     except Exception as exc:  # noqa: BLE001 - report it, don't dump a traceback
         print(f"[error] {exc}", file=sys.stderr)
-        print(f"[session {session_id}]", file=sys.stderr)
+        _print_run_footer(agent, session_id)
         return 1
     print(reply)
-    print(f"[session {session_id}]", file=sys.stderr)
+    _print_run_footer(agent, session_id)
     return 0
+
+
+def _print_run_footer(agent: Agent, session_id: str) -> None:
+    # The provider's own totals, so compaction and subagent calls are in them.
+    # A provider that keeps none (a custom one) gets no usage line.
+    usage = getattr(agent.provider, "usage", None)
+    if usage:
+        print(f"[usage {json.dumps(usage)}]", file=sys.stderr)
+    print(f"[session {session_id}]", file=sys.stderr)
 
 
 def _apply_sandbox_args(cfg: Config, args: argparse.Namespace) -> None:

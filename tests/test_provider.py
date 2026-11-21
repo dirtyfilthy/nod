@@ -257,3 +257,36 @@ def test_complete_gives_up_after_retries_and_skips_non_retryable(monkeypatch):
     with pytest.raises(ProviderError, match="400"):
         p.complete([])
     assert len(calls) == 1
+
+
+def test_complete_adds_each_call_to_the_running_usage(monkeypatch):
+    p = OpenAICompatibleProvider(model="m", api_key="x", retries=1, sleep=lambda s: None)
+    metas = [
+        {"usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost": 0.001}},
+        {},  # an endpoint that reports no usage still counts as a call
+        {"usage": {"prompt_tokens": 5, "completion_tokens": 1, "cost": 0.0005}},
+    ]
+
+    from nod.messages import Message
+
+    def once(messages, tools, on_token):
+        return Message(role="assistant", content="ok", meta=dict(metas.pop(0)))
+
+    monkeypatch.setattr(p, "_complete_once", once)
+    for _ in range(3):
+        p.complete([])
+
+    assert p.usage == {"calls": 3, "prompt_tokens": 15, "completion_tokens": 3, "cost": 0.0015}
+
+
+def test_a_failed_call_adds_nothing_to_the_usage(monkeypatch):
+    p = OpenAICompatibleProvider(model="m", api_key="x", retries=0)
+
+    def bad_request(messages, tools, on_token):
+        raise ProviderError("400 from provider")
+
+    monkeypatch.setattr(p, "_complete_once", bad_request)
+    with pytest.raises(ProviderError):
+        p.complete([])
+
+    assert p.usage["calls"] == 0

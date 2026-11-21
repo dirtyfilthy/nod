@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 
 from conftest import FakeProvider
@@ -113,3 +114,60 @@ def test_model_flag_overrides_the_config(monkeypatch, tmp_path):
     cli.main(["--model", "from/flag", "run", "go"])
 
     assert seen == ["from/config", "from/flag"]
+
+
+def test_max_turns_flag_overrides_the_config(monkeypatch, tmp_path):
+    seen = []
+    _wire(monkeypatch, tmp_path, [assistant("a"), assistant("b")])
+    agent_for = cli.build_agent
+    monkeypatch.setattr(cli, "build_agent", lambda cfg: seen.append(cfg.max_turns) or agent_for(cfg))
+    (tmp_path / "config.toml").write_text("max_turns = 7\n")
+
+    cli.main(["run", "go"])
+    cli.main(["--max-turns", "3", "run", "go"])
+
+    assert seen == [7, 3]
+
+
+def test_sigterm_handler_is_in_place_before_the_agent_is_built(monkeypatch, tmp_path):
+    # Building the agent starts the sandbox container, so a SIGTERM during the
+    # build has to reach the handler or the container is left behind.
+    order = []
+    agent = _wire(monkeypatch, tmp_path, [assistant("ok")])
+    monkeypatch.setattr(cli.signal, "signal", lambda *a: order.append("handler"))
+    monkeypatch.setattr(cli, "build_agent", lambda cfg: order.append("build") or agent)
+
+    cli.main(["run", "go"])
+
+    assert order == ["handler", "build"]
+
+
+def test_run_prints_what_the_provider_used(monkeypatch, tmp_path, capsys):
+    agent = _wire(monkeypatch, tmp_path, [assistant("ok")])
+    agent.provider.usage = {"calls": 2, "prompt_tokens": 30, "completion_tokens": 5, "cost": 0.0012}
+
+    assert cli.main(["run", "--session", "s", "go"]) == 0
+
+    err = capsys.readouterr().err.splitlines()
+    assert err[-1] == "[session s]"
+    assert err[-2].startswith("[usage ") and err[-2].endswith("]")
+    assert json.loads(err[-2][len("[usage ") : -1]) == agent.provider.usage
+
+
+def test_run_prints_usage_when_the_turn_fails_too(monkeypatch, tmp_path, capsys):
+    def boom(messages):
+        raise RuntimeError("provider down")
+
+    agent = _wire(monkeypatch, tmp_path, [boom])
+    agent.provider.usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}
+
+    assert cli.main(["run", "go"]) == 1
+    assert '[usage {"calls": 0' in capsys.readouterr().err
+
+
+def test_run_prints_no_usage_line_for_a_provider_that_keeps_none(monkeypatch, tmp_path, capsys):
+    _wire(monkeypatch, tmp_path, [assistant("ok")])
+
+    cli.main(["run", "go"])
+
+    assert "[usage" not in capsys.readouterr().err

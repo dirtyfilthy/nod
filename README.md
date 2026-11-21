@@ -26,7 +26,7 @@ export OPENROUTER_API_KEY=sk-or-...
 python -m nod
 ```
 
-That drops you into a CLI chat. `cp config.example.toml config.toml` first if you want to change the model or paths. To try another model without touching the config, pass `--model` (before any subcommand): `nod --model openai/gpt-5 run "..."`.
+That drops you into a CLI chat. `cp config.example.toml config.toml` first if you want to change the model or paths. To try another model without touching the config, pass `--model` (before any subcommand): `nod --model openai/gpt-5 run "..."`. `--max-turns N` does the same for the config's `max_turns`.
 
 ## One shot
 
@@ -39,7 +39,19 @@ nod run -f task.md "skip the tests"      # text on the line goes after the file'
 git diff | nod run -f - "review this"    # '-' reads stdin
 ```
 
-Nod works through the task as it would in a chat turn, prints its final reply to stdout and exits: 0 when it answered, 1 when the provider failed, 2 when there were no instructions. Each run gets a fresh session, whose id is printed to stderr (`[session run-...]`); pick it up with `nod chat --session <id>`, or pass `--session` to `run` to continue an existing one. The sandbox flags go before `run` as usual (`nod --sandbox run ...`). With nod-extras loaded, jobs still running when the reply comes back are killed at exit, so a task that starts them should wait for them.
+Nod works through the task as it would in a chat turn and prints its final reply to stdout. Each run gets a fresh session, whose id is printed to stderr (`[session run-...]`); pick it up with `nod chat --session <id>`, or pass `--session` to `run` to continue an existing one.
+
+For a script that drives `nod run`, the exit status and the end of stderr are the contract:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Nod replied. A turn cut short by `max_turns` also exits 0; its reply is `(stopped: hit the max_turns limit before finishing)`. |
+| 1 | The turn failed, usually the provider. Stderr has an `[error] ...` line. |
+| 2 | Nothing ran: no instructions, an unreadable file, or a config, API key or sandbox problem. |
+
+Stderr ends with two lines, on a failure too: `[usage {"calls": 4, "prompt_tokens": 9120, "completion_tokens": 310, "cost": 0.0021}]`, then `[session <id>]`. The usage is what this process spent with the provider, compaction and subagent calls included; `cost` is the sum of what OpenRouter reported and stays 0 for an endpoint that reports none.
+
+The sandbox flags go before `run` as usual (`nod --sandbox run ...`). With nod-extras loaded, jobs still running when the reply comes back are killed at exit, so a task that starts them should wait for them.
 
 ## Running as a service
 
