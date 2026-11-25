@@ -2,7 +2,7 @@
 
 An agent of his own. East of Eden, off the map.
 
-A deliberately thin agent core: rent the brain (any OpenAI-compatible LLM endpoint), build the scaffold yourself. Every moving part hides behind a small interface so you can swap it in one line. The "millions of skills" live in a separate `nod-extras` directory, not here.
+A deliberately thin agent core: rent the brain (any OpenAI-compatible LLM endpoint), build the scaffold yourself. Every moving part hides behind a small interface so you can swap it in one line. The "millions of skills" live in a separate [`nod-extras`](https://github.com/dirtyfilthy/nod-extras) repo, not here.
 
 ## What's in the core
 
@@ -142,3 +142,12 @@ agent = Agent(provider=MyProvider(), registry=registry, memory=memory, skills=sk
 ```
 
 The same pattern applies to `Memory` and `Gateway`. See the `Protocol` definitions in each module.
+
+## Related repos
+
+- [nod-extras](https://github.com/dirtyfilthy/nod-extras): background jobs, subagents and skills, the parts that don't belong in the thin core.
+- [nod-poll](https://github.com/dirtyfilthy/nod-poll): ask a panel of models the same question through Nod, each in a network-less sandbox, then tally the points they agree on.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
